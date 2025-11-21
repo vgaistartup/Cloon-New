@@ -1,0 +1,75 @@
+
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+*/
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+body {
+  background-color: #F5F5F7; /* Apple System Gray 6 (Light) */
+  color: #1D1D1F; /* Apple System Label Color */
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  height: 100dvh; /* Use dynamic viewport height for mobile browsers */
+  width: 100vw;
+  overflow: hidden; /* Prevent body scroll, handle in app containers */
+}
+
+#root {
+  height: 100%;
+  width: 100%;
+}
+
+/* Animation for gentle fade-in of components */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-in {
+  animation: fade-in 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+/* Animation for the main canvas image to zoom into focus */
+@keyframes zoom-in {
+  from {
+    transform: scale(0.98);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.animate-zoom-in {
+  animation: zoom-in 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+/* Custom scrollbar for a more integrated look */
+::-webkit-scrollbar {
+  width: 0px; /* Hide scrollbars for cleaner look, native feel */
+  background: transparent;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+    display: none;
+}
+
+.scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+/* Apple-style glass effect utility */
+.glass {
+    background-color: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
