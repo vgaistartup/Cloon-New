@@ -508,56 +508,63 @@ const App: React.FC = () => {
       }
   };
   
+  // Non-blocking upload handler
   const handleCustomUpload = async (file: File): Promise<WardrobeItem | undefined> => {
-      setIsLoading(true);
-      setLoadingMessage("Analyzing wardrobe item...");
+      // 1. Create temporary item immediately to unblock UI
+      const tempId = `custom-${Date.now()}`;
       
+      let base64Url = '';
       try {
-          const analysis = await analyzeWardrobeItem(file);
-          
-          const base64Url = await new Promise<string>((resolve) => {
+          base64Url = await new Promise<string>((resolve) => {
                const reader = new FileReader();
                reader.onload = (e) => resolve(e.target?.result as string);
                reader.readAsDataURL(file);
           });
-              
-          const newItem: WardrobeItem = {
-              id: `custom-${Date.now()}`,
-              name: analysis.name || file.name,
-              url: base64Url,
-              category: analysis.category,
-              subCategory: analysis.subCategory,
-              mainColor: analysis.mainColor,
-              densePrompt: analysis.densePrompt,
-              searchTags: analysis.searchTags
-          };
-          
-          setWardrobe(prev => [newItem, ...prev]);
-          await userDataService.addToWardrobe(newItem, newItem.category);
-          
-          setIsLoading(false);
-          setLoadingMessage('');
-          return newItem;
-
       } catch (e) {
-          console.error("Analysis failed, falling back to simple upload", e);
-          const base64Url = await new Promise<string>((resolve) => {
-               const reader = new FileReader();
-               reader.onload = (e) => resolve(e.target?.result as string);
-               reader.readAsDataURL(file);
-          });
-
-          const newItem: WardrobeItem = {
-              id: `custom-${Date.now()}`,
-              name: file.name,
-              url: base64Url
-          };
-          setWardrobe(prev => [newItem, ...prev]);
-          await userDataService.addToWardrobe(newItem, 'custom');
-          setIsLoading(false);
-          setLoadingMessage('');
-          return newItem;
+          console.error("Failed to read file", e);
+          return undefined;
       }
+
+      const tempItem: WardrobeItem = {
+          id: tempId,
+          name: file.name,
+          url: base64Url,
+          category: 'processing', 
+          isAnalyzing: true // Mark as analyzing
+      };
+      
+      // 2. Update state immediately
+      setWardrobe(prev => [tempItem, ...prev]);
+      
+      // 3. Trigger background analysis
+      analyzeWardrobeItem(file).then(async (analysis) => {
+          const updatedItem: WardrobeItem = {
+              ...tempItem,
+              ...analysis,
+              name: analysis.name || tempItem.name,
+              category: analysis.category || 'top',
+              isAnalyzing: false // Finished analyzing
+          };
+          
+          // Update local state with enriched data
+          setWardrobe(prev => prev.map(item => item.id === tempId ? updatedItem : item));
+          
+          // Save to Database (after we have the metadata)
+          try {
+              await userDataService.addToWardrobe(updatedItem, updatedItem.category);
+          } catch (err) {
+              console.error("Failed to save background analyzed item to DB:", err);
+          }
+      }).catch(err => {
+          console.error("Background analysis failed:", err);
+          // Stop spinner, keep as basic item
+          setWardrobe(prev => prev.map(item => item.id === tempId ? { ...item, isAnalyzing: false, category: 'custom' } : item));
+          // Still try to save
+          userDataService.addToWardrobe({ ...tempItem, category: 'custom', isAnalyzing: false }, 'custom');
+      });
+
+      // 4. Return the temp item immediately so callers (like RemixStudio) can use it
+      return tempItem;
   };
 
   const handleProductSelect = (item: Product | WardrobeItem) => {

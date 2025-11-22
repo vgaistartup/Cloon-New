@@ -16,6 +16,7 @@ export interface WardrobeItem {
   mainColor?: string;
   densePrompt?: string; // The "Dense Visual Description"
   searchTags?: string[];
+  isAnalyzing?: boolean; // UI state for background processing
 }
 
 export interface OutfitLayer {

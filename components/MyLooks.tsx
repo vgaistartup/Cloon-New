@@ -202,7 +202,9 @@ const MyLooks: React.FC<MyLooksProps> = ({ looks, products, modelImageUrl, onMod
         const currentLook = sortedLooks[activeIndex];
         if (currentLook && onPoseSelect) {
             onPoseSelect(currentLook.id, { pose: instruction });
-            // Reset UI state to default
+            // Close the sheet automatically
+            setIsSheetOpen(false);
+            // Reset UI state to default for next open
             setSheetMode('products');
         }
     };
@@ -212,6 +214,8 @@ const MyLooks: React.FC<MyLooksProps> = ({ looks, products, modelImageUrl, onMod
         setSelectedVibeId(vibeId);
         if (currentLook && onPoseSelect) {
             onPoseSelect(currentLook.id, { vibe: prompt });
+            // Close the sheet automatically
+            setIsSheetOpen(false);
             setSheetMode('products');
         }
     };

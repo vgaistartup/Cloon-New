@@ -7,6 +7,7 @@ import React, { useState } from 'react';
 import { WardrobeItem } from '../types';
 import { UploadCloudIcon, Trash2Icon, FilterIcon, CheckCircleIcon, XIcon, SparklesIcon } from './icons';
 import { motion, AnimatePresence } from 'framer-motion';
+import Spinner from './Spinner';
 
 interface WardrobeViewProps {
     wardrobe: WardrobeItem[];
@@ -40,6 +41,7 @@ const WardrobeView: React.FC<WardrobeViewProps> = ({ wardrobe, onProductSelect, 
     };
 
     const handleItemClick = (item: WardrobeItem) => {
+        if (item.isAnalyzing) return; // Prevent interaction while analyzing
         if (isSelectionMode) {
             toggleSelection(item.id);
         } else {
@@ -161,7 +163,7 @@ const WardrobeView: React.FC<WardrobeViewProps> = ({ wardrobe, onProductSelect, 
                         return (
                             <div 
                                 key={item.id} 
-                                className="flex flex-col gap-3 group cursor-pointer relative"
+                                className={`flex flex-col gap-3 group cursor-pointer relative ${item.isAnalyzing ? 'opacity-90' : ''}`}
                                 onClick={() => handleItemClick(item)}
                             >
                                 <div className={`group relative aspect-[3/4] bg-white rounded-card overflow-hidden border shadow-soft transition-all duration-300 ${isSelected ? 'border-black ring-1 ring-black' : 'border-border hover:shadow-elevated'}`}>
@@ -171,8 +173,18 @@ const WardrobeView: React.FC<WardrobeViewProps> = ({ wardrobe, onProductSelect, 
                                         className={`w-full h-full object-cover transition-transform duration-500 ${isSelected ? 'scale-95' : 'group-hover:scale-105'}`} 
                                     />
                                     
-                                    {/* Try On Button Overlay */}
-                                    {!isSelectionMode && onTryOn && (
+                                    {/* Analysis Spinner Overlay */}
+                                    {item.isAnalyzing && (
+                                        <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] flex flex-col items-center justify-center z-30">
+                                            <div className="scale-75">
+                                                <Spinner />
+                                            </div>
+                                            <span className="text-[10px] font-semibold text-text-secondary mt-2 tracking-wide">Analyzing...</span>
+                                        </div>
+                                    )}
+                                    
+                                    {/* Try On Button Overlay (Hidden if analyzing) */}
+                                    {!isSelectionMode && onTryOn && !item.isAnalyzing && (
                                         <button
                                             onClick={(e) => {
                                                 e.stopPropagation();
@@ -188,7 +200,7 @@ const WardrobeView: React.FC<WardrobeViewProps> = ({ wardrobe, onProductSelect, 
 
                                     {/* Selection Overlay */}
                                     <AnimatePresence>
-                                        {isSelectionMode && (
+                                        {isSelectionMode && !item.isAnalyzing && (
                                             <motion.div 
                                                 initial={{ opacity: 0 }}
                                                 animate={{ opacity: 1 }}
