@@ -1,10 +1,9 @@
-
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Cloon</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -12,9 +11,30 @@
         theme: {
           extend: {
             fontFamily: {
-              sans: ['Inter', 'sans-serif'],
-              serif: ['Instrument Serif', 'serif'],
+              sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
+              serif: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'], // Mapped to Inter for Minimal theme
+              display: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'],
             },
+            colors: {
+              background: '#FFFFFF',
+              surface: '#FFFFFF',
+              'surface-subtle': '#F7F7F7',
+              border: 'rgba(0,0,0,0.06)',
+              primary: '#000000',
+              'text-primary': 'rgba(0,0,0,0.88)',
+              'text-secondary': 'rgba(0,0,0,0.60)',
+            },
+            borderRadius: {
+              'btn': '14px',
+              'card': '18px',
+              'sheet': '32px',
+              'pill': '999px',
+            },
+            boxShadow: {
+              'soft': '0 8px 24px rgba(0,0,0,0.06)',
+              'elevated': '0 10px 30px rgba(0,0,0,0.08)',
+              'float': '0 20px 40px rgba(0,0,0,0.12)',
+            }
           }
         }
       }
@@ -39,7 +59,7 @@
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:wght@400;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://esm.sh/react-image-crop@^11.0.6/dist/ReactCrop.css" />
     <link rel="stylesheet" href="/index.css" />
   </head>

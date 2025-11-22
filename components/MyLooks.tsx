@@ -3,169 +3,543 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import StartScreen from './StartScreen';
-import { DotsVerticalIcon, FilterIcon, RotateCcwIcon, CheckCircleIcon } from './icons';
-import { motion, AnimatePresence } from 'framer-motion';
+import { DotsVerticalIcon, RotateCcwIcon, ShareIcon, Trash2Icon, PlusIcon, UserIcon, SparklesIcon, SkeletonFrontIcon, SkeletonThreeQuarterIcon, SkeletonSideIcon, SkeletonWalkIcon, SkeletonActionIcon, SkeletonLeanIcon, XIcon, ChevronDownIcon } from './icons';
+import { motion, AnimatePresence, PanInfo } from 'framer-motion';
 import { Look } from '../types';
+import { Product } from '../data/products';
 
 interface MyLooksProps {
     looks: Look[];
+    products: Product[];
     modelImageUrl: string | null;
     onModelFinalized: (url: string) => void;
-    onResetModel: () => void;
+    onCreateNewAvatar: () => void;
+    onDeleteLook: (id: string) => void;
+    onProductSelect: (product: Product) => void;
+    initialLookId?: string | null;
+    onResetInitialLookId?: () => void;
+    onRemix: () => void;
+    onPoseSelect?: (lookId: string, poseInstruction: string) => void;
+    generationProgress: number;
+    queueCount?: number;
+    onClose: () => void;
 }
 
 type SortOrder = 'newest' | 'oldest';
 
-const MyLooks: React.FC<MyLooksProps> = ({ looks, modelImageUrl, onModelFinalized, onResetModel }) => {
-    const [sortOrder, setSortOrder] = useState<SortOrder>('newest');
-    const [hiddenLookIds, setHiddenLookIds] = useState<string[]>([]);
-    const [isMenuOpen, setIsMenuOpen] = useState(false);
-    const [isFilterOpen, setIsFilterOpen] = useState(false);
+const POSE_OPTIONS = [
+    { label: 'Frontal', instruction: 'Full frontal view, hands on hips', icon: SkeletonFrontIcon },
+    { label: '3/4 Turn', instruction: 'Slightly turned, 3/4 view', icon: SkeletonThreeQuarterIcon },
+    { label: 'Side View', instruction: 'Side profile view', icon: SkeletonSideIcon },
+    { label: 'Walking', instruction: 'Walking towards camera, dynamic motion', icon: SkeletonWalkIcon },
+    { label: 'Action', instruction: 'Jumping in the air, mid-action shot', icon: SkeletonActionIcon },
+    { label: 'Leaning', instruction: 'Leaning against a wall, casual', icon: SkeletonLeanIcon },
+];
 
-    const activeLooks = useMemo(() => {
-        return looks.filter(look => !hiddenLookIds.includes(look.id));
-    }, [looks, hiddenLookIds]);
+const MyLooks: React.FC<MyLooksProps> = ({ looks, products, modelImageUrl, onModelFinalized, onCreateNewAvatar, onDeleteLook, onProductSelect, initialLookId, onResetInitialLookId, onRemix, onPoseSelect, generationProgress, queueCount = 0, onClose }) => {
+    const [activeIndex, setActiveIndex] = useState(0);
+    const [isMenuOpen, setIsMenuOpen] = useState(false);
+    const scrollRef = useRef<HTMLDivElement>(null);
+    
+    // Bottom Sheet State
+    const [isSheetOpen, setIsSheetOpen] = useState(false);
+    const [sheetMode, setSheetMode] = useState<'products' | 'poses'>('products');
+
+    // Look Counter Auto-Hide State
+    const [isCountVisible, setIsCountVisible] = useState(false);
+    const countTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const sortedLooks = useMemo(() => {
-        const looksCopy = [...activeLooks];
-        if (sortOrder === 'oldest') {
-            return looksCopy.reverse();
+        // Default to newest first
+        return [...looks];
+    }, [looks]);
+
+    // Handle initial look selection (deep linking from Home or Try-On)
+    useEffect(() => {
+        if (initialLookId && sortedLooks.length > 0 && scrollRef.current) {
+            const index = sortedLooks.findIndex(l => l.id === initialLookId);
+            if (index !== -1) {
+                // Small timeout ensures DOM layout is stable before scrolling
+                setTimeout(() => {
+                    if (scrollRef.current) {
+                        const width = scrollRef.current.clientWidth;
+                        scrollRef.current.scrollTo({ left: index * width, behavior: 'auto' });
+                        setActiveIndex(index);
+                        
+                        // Clear the ID so we don't keep jumping back if the user scrolls away and returns
+                        if (onResetInitialLookId) {
+                            onResetInitialLookId();
+                        }
+                    }
+                }, 100);
+            }
         }
-        return looksCopy;
-    }, [activeLooks, sortOrder]);
+    }, [initialLookId, sortedLooks, onResetInitialLookId]);
+
+    const handleScroll = () => {
+        if (scrollRef.current) {
+            const scrollLeft = scrollRef.current.scrollLeft;
+            const width = scrollRef.current.clientWidth;
+            const index = Math.round(scrollLeft / width);
+            setActiveIndex(index);
+        }
+    };
+
+    // Auto-hide look counter on swipe
+    useEffect(() => {
+        setIsCountVisible(true);
+        if (countTimerRef.current) clearTimeout(countTimerRef.current);
+        
+        countTimerRef.current = setTimeout(() => {
+            setIsCountVisible(false);
+        }, 2000);
+
+        return () => {
+            if (countTimerRef.current) clearTimeout(countTimerRef.current);
+        };
+    }, [activeIndex]);
+
+    // Reset active index if looks change significantly (e.g. deletion)
+    useEffect(() => {
+        if (activeIndex >= sortedLooks.length && sortedLooks.length > 0) {
+            setActiveIndex(sortedLooks.length - 1);
+        }
+    }, [sortedLooks.length, activeIndex]);
+
+    // Reset sheet mode when changing looks
+    useEffect(() => {
+        setSheetMode('products');
+    }, [activeIndex]);
+
+    const currentLookItems = useMemo(() => {
+        if (!sortedLooks[activeIndex]) return [];
+        return sortedLooks[activeIndex].garments.map(garment => {
+            const product = products.find(p => p.id === garment.id);
+            return product || garment;
+        });
+    }, [sortedLooks, activeIndex, products]);
+    
+    const handleShareLook = async () => {
+        const currentLook = sortedLooks[activeIndex];
+        if (!currentLook) return;
+        
+        const shareData = {
+            title: 'My Look on Cloon',
+            text: 'Check out this outfit I created with AI!',
+            url: currentLook.url
+        };
+
+        try {
+            if (navigator.share) {
+                await navigator.share(shareData);
+            } else {
+                await navigator.clipboard.writeText(currentLook.url);
+                alert("Look URL copied to clipboard!");
+            }
+        } catch (err) {
+            console.error('Error sharing:', err);
+            try {
+                await navigator.clipboard.writeText(currentLook.url);
+                alert("Look URL copied to clipboard!");
+            } catch (e) {}
+        }
+        setIsMenuOpen(false);
+    };
+    
+    const handleDeleteCurrentLook = () => {
+        setIsMenuOpen(false);
+        const currentLook = sortedLooks[activeIndex];
+        if (currentLook) {
+            if (window.confirm("Are you sure you want to delete this look? This action cannot be undone.")) {
+                onDeleteLook(currentLook.id);
+                if (activeIndex > 0) {
+                    setActiveIndex(prev => prev - 1);
+                }
+            }
+        }
+    };
+    
+    const handlePoseClick = (instruction: string) => {
+        const currentLook = sortedLooks[activeIndex];
+        if (currentLook && onPoseSelect) {
+            onPoseSelect(currentLook.id, instruction);
+            // Reset UI state
+            setSheetMode('products');
+        }
+    };
+
+    const isBaseModel = useMemo(() => {
+        const currentLook = sortedLooks[activeIndex];
+        if (!currentLook) return false;
+        return currentLook.id.startsWith('model-base-') || currentLook.id.startsWith('temp-base-');
+    }, [sortedLooks, activeIndex]);
+
+    const radius = 9;
+    const circumference = 2 * Math.PI * radius;
+    const offset = circumference - (generationProgress / 100) * circumference;
 
     if (!modelImageUrl) {
-        // Allow scrolling for the start screen content
         return (
-            <div className="h-full w-full overflow-y-auto bg-[#F5F5F7] scrollbar-hide">
+            <div className="h-full w-full bg-white flex flex-col">
+                 <div className="px-6 pt-4 pb-2"></div>
                  <StartScreen onModelFinalized={onModelFinalized} />
             </div>
         );
     }
 
     return (
-        <div className="relative w-full h-full bg-[#F5F5F7] overflow-hidden flex flex-col">
+        <div className="relative w-full h-full bg-white flex flex-col overflow-hidden">
             {/* Header */}
-            <header className="absolute top-0 left-0 right-0 px-6 py-4 flex items-center justify-between z-30">
-                <div className="w-10"></div>
+            <header className="relative w-full h-[60px] min-h-[60px] px-4 flex items-center justify-between z-20 shrink-0 bg-white/95 backdrop-blur-xl border-b border-border">
+                 {/* Left Actions */}
+                 <div className="w-16 flex items-center">
+                    <button 
+                        onClick={onClose} 
+                        className="p-2 -ml-2 rounded-full text-text-primary hover:bg-surface-subtle transition-colors"
+                        aria-label="Close"
+                    >
+                        <XIcon className="w-6 h-6" />
+                    </button>
+                 </div>
 
-                <div className="flex items-center gap-2">
-                    <h1 className="text-[17px] font-semibold text-[#1D1D1F] tracking-tight">My Collection</h1>
-                    <span className="flex items-center justify-center px-2 py-0.5 bg-black/5 text-gray-500 text-[11px] font-bold rounded-full">
-                        {activeLooks.length}
-                    </span>
-                </div>
+                 {/* Absolute Center Title */}
+                 <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center justify-center pointer-events-none">
+                    <h1 className="text-lg font-bold text-text-primary tracking-tight">My Looks</h1>
+                 </div>
 
-                <div className="flex items-center gap-2 w-10 justify-end">
-                     <div className="relative">
-                        <button 
-                            onClick={() => setIsFilterOpen(!isFilterOpen)}
-                            className="w-8 h-8 flex items-center justify-center rounded-full bg-white/80 backdrop-blur-md hover:bg-white transition-all shadow-sm"
-                        >
-                            <FilterIcon className="w-4 h-4 text-[#1D1D1F]" />
-                        </button>
-                        <AnimatePresence>
-                            {isFilterOpen && (
-                                <>
-                                <div className="fixed inset-0 z-30" onClick={() => setIsFilterOpen(false)} />
-                                <motion.div 
-                                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                                    className="absolute right-0 top-full mt-2 w-40 bg-white/90 backdrop-blur-xl rounded-2xl shadow-[0_10px_40px_rgba(0,0,0,0.1)] border border-gray-100 z-40 overflow-hidden p-1.5"
-                                >
-                                    <button 
-                                        onClick={() => { setSortOrder('newest'); setIsFilterOpen(false); }}
-                                        className={`w-full text-left px-3 py-2 rounded-xl text-[13px] flex items-center justify-between transition-colors ${sortOrder === 'newest' ? 'bg-gray-50 text-black font-semibold' : 'text-gray-500 hover:bg-gray-50'}`}
-                                    >
-                                        Newest
-                                        {sortOrder === 'newest' && <CheckCircleIcon className="w-3.5 h-3.5 text-black"/>}
-                                    </button>
-                                    <button 
-                                        onClick={() => { setSortOrder('oldest'); setIsFilterOpen(false); }}
-                                        className={`w-full text-left px-3 py-2 rounded-xl text-[13px] flex items-center justify-between transition-colors ${sortOrder === 'oldest' ? 'bg-gray-50 text-black font-semibold' : 'text-gray-500 hover:bg-gray-50'}`}
-                                    >
-                                        Oldest
-                                        {sortOrder === 'oldest' && <CheckCircleIcon className="w-3.5 h-3.5 text-black"/>}
-                                    </button>
-                                </motion.div>
-                                </>
-                            )}
-                        </AnimatePresence>
-                    </div>
-                    
-                    <div className="relative">
-                        <button 
-                            onClick={() => setIsMenuOpen(!isMenuOpen)}
-                            className="w-8 h-8 flex items-center justify-center rounded-full bg-white/80 backdrop-blur-md hover:bg-white transition-all shadow-sm"
-                        >
-                            <DotsVerticalIcon className="w-4 h-4 text-[#1D1D1F]" />
-                        </button>
-                        <AnimatePresence>
-                             {isMenuOpen && (
-                                <>
-                                <div className="fixed inset-0 z-30" onClick={() => setIsMenuOpen(false)} />
-                                <motion.div 
-                                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                                    className="absolute right-0 top-full mt-2 w-52 bg-white/90 backdrop-blur-xl rounded-2xl shadow-[0_10px_40px_rgba(0,0,0,0.1)] border border-gray-100 z-40 overflow-hidden p-1.5"
-                                >
-                                    <button
-                                        onClick={() => {
-                                            setIsMenuOpen(false);
-                                            onResetModel();
-                                        }}
-                                        className="w-full text-left px-3 py-2.5 rounded-xl text-[13px] text-red-500 hover:bg-red-50 flex items-center gap-2 font-medium transition-colors"
-                                    >
-                                        <RotateCcwIcon className="w-4 h-4" />
-                                        Reset Avatar
-                                    </button>
-                                </motion.div>
-                                </>
-                            )}
-                        </AnimatePresence>
-                    </div>
-                </div>
-            </header>
-
-            {/* Main Content - Horizontal Swipe */}
-            <div className="flex-grow w-full overflow-x-auto overflow-y-hidden snap-x snap-mandatory scrollbar-hide flex items-stretch bg-[#F5F5F7]">
-                {sortedLooks.length === 0 ? (
-                    <div className="w-full flex flex-col items-center justify-center text-gray-400 gap-4 px-8 text-center animate-fade-in">
-                        <p className="text-2xl font-bold text-gray-900">Empty Collection</p>
-                        <p className="text-base text-gray-500">Your style journey starts in the Wardrobe.</p>
-                    </div>
-                ) : (
-                    sortedLooks.map((look) => (
-                        <div key={look.id} className="flex-shrink-0 w-full h-full snap-center flex flex-col items-center justify-center relative">
-                            
-                            {/* Image taking full space seamlessly */}
-                            <div className="absolute inset-0 flex items-center justify-center pb-0 pt-0">
-                                <img 
-                                    src={look.url} 
-                                    alt="Look" 
-                                    className="max-h-full w-full object-cover animate-zoom-in"
-                                    draggable={false}
+                 {/* Right Actions */}
+                 <div className="flex items-center justify-end gap-2 min-w-[40px]">
+                    {queueCount > 0 && (
+                        <div className="flex items-center justify-center">
+                             <svg className="w-5 h-5 transform -rotate-90" viewBox="0 0 24 24">
+                                {/* Track */}
+                                <circle
+                                    className="text-surface-subtle"
+                                    strokeWidth="3"
+                                    stroke="currentColor"
+                                    fill="transparent"
+                                    r={radius}
+                                    cx="12"
+                                    cy="12"
                                 />
-                            </div>
+                                {/* Progress */}
+                                <circle
+                                    className="text-black transition-all duration-300 ease-in-out"
+                                    strokeWidth="3"
+                                    strokeDasharray={circumference}
+                                    strokeDashoffset={offset}
+                                    strokeLinecap="round"
+                                    stroke="currentColor"
+                                    fill="transparent"
+                                    r={radius}
+                                    cx="12"
+                                    cy="12"
+                                />
+                                {/* Queue Count */}
+                                <text 
+                                    x="12" 
+                                    y="12" 
+                                    className="text-[9px] font-bold fill-current text-black" 
+                                    textAnchor="middle" 
+                                    dominantBaseline="central"
+                                    transform="rotate(90 12 12)" 
+                                >
+                                    {queueCount}
+                                </text>
+                            </svg>
+                        </div>
+                    )}
+                    <button 
+                        onClick={() => setIsMenuOpen(!isMenuOpen)}
+                        className="w-10 h-10 flex items-center justify-end text-text-primary"
+                    >
+                        <DotsVerticalIcon className="w-5 h-5" />
+                    </button>
+                 </div>
+            </header>
+            
+            {/* Overflow Menu */}
+            <AnimatePresence>
+                 {isMenuOpen && (
+                    <>
+                    <div className="fixed inset-0 z-40 bg-transparent" onClick={() => setIsMenuOpen(false)} />
+                    <motion.div 
+                        initial={{ opacity: 0, scale: 0.95, y: -10 }}
+                        animate={{ opacity: 1, scale: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.95, y: -10 }}
+                        transition={{ duration: 0.1 }}
+                        className="fixed top-12 right-4 w-60 bg-white rounded-xl shadow-float border border-border z-50 p-1 overflow-hidden"
+                    >
+                        <button
+                            onClick={handleShareLook}
+                            className="w-full text-left px-4 py-3 rounded-lg text-sm text-text-primary hover:bg-surface-subtle flex items-center gap-3 transition-all"
+                        >
+                            <ShareIcon className="w-4 h-4" />
+                            Share Look
+                        </button>
+                        
+                        {!isBaseModel && (
+                            <button
+                                onClick={handleDeleteCurrentLook}
+                                disabled={sortedLooks.length === 0}
+                                className="w-full text-left px-4 py-3 rounded-lg text-sm text-text-primary hover:bg-surface-subtle flex items-center gap-3 transition-all disabled:opacity-50"
+                            >
+                                <Trash2Icon className="w-4 h-4" />
+                                Delete Look
+                            </button>
+                        )}
+                        
+                        <div className="h-px bg-border my-1 mx-2"></div>
+                        <button
+                            onClick={() => {
+                                setIsMenuOpen(false);
+                                onCreateNewAvatar();
+                            }}
+                            className="w-full text-left px-4 py-3 rounded-lg text-sm text-text-primary hover:bg-surface-subtle flex items-center gap-3 font-medium transition-all"
+                        >
+                            <PlusIcon className="w-4 h-4" />
+                            Create New Avatar
+                        </button>
+                    </motion.div>
+                    </>
+                )}
+            </AnimatePresence>
 
-                            {/* Minimal Info Overlay at bottom - Glassmorphism */}
-                            <div className="absolute bottom-28 left-1/2 -translate-x-1/2 px-6 py-3 bg-white/30 backdrop-blur-md rounded-full border border-white/20 shadow-lg flex items-center gap-3 z-10 max-w-[90%]">
-                                <div className="flex flex-col items-center">
-                                     <h3 className="text-sm font-semibold text-[#1D1D1F] whitespace-nowrap truncate max-w-[200px]">
-                                        {look.items.length > 0 ? look.items[0] : 'New Look'}
-                                        {look.items.length > 1 && <span className="text-gray-500 font-normal"> + {look.items.length - 1} more</span>}
-                                    </h3>
+            {/* Avatar Carousel */}
+            {/* pb-[100px] reserves space for the 80px collapsed bottom sheet so the avatar isn't hidden */}
+            <div className="w-full flex-1 relative min-h-0 pb-[100px]">
+                
+                {/* Look Counter - Floating at bottom */}
+                <AnimatePresence>
+                    {sortedLooks.length > 0 && isCountVisible && (
+                        <motion.div 
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: 10 }}
+                            transition={{ duration: 0.3 }}
+                            className="absolute bottom-[100px] left-0 right-0 flex justify-center z-20 pointer-events-none"
+                        >
+                            <div className="bg-black/50 backdrop-blur-md border border-white/10 shadow-sm px-3 py-1 rounded-full">
+                                <span className="text-[11px] font-semibold text-white tracking-wide">
+                                    {activeIndex + 1} of {sortedLooks.length}
+                                </span>
+                            </div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+
+                <div 
+                    ref={scrollRef}
+                    onScroll={handleScroll}
+                    className="w-full h-full overflow-x-auto overflow-y-hidden snap-x snap-mandatory scrollbar-hide flex items-center"
+                >
+                    {sortedLooks.length === 0 ? (
+                        <div className="w-full h-full flex flex-col items-center justify-center text-gray-400 gap-4 px-8 text-center mb-12 bg-white">
+                            <div className="w-16 h-16 bg-surface-subtle rounded-full flex items-center justify-center mb-2">
+                                <RotateCcwIcon className="w-6 h-6 text-text-secondary" />
+                            </div>
+                            <p className="text-lg font-bold text-text-primary">No looks saved</p>
+                            <p className="text-sm text-text-secondary max-w-xs mx-auto">Create your first look by mixing and matching items in your wardrobe.</p>
+                        </div>
+                    ) : (
+                        sortedLooks.map((look) => (
+                            <div key={look.id} className="flex-shrink-0 w-full h-full snap-center flex items-center justify-center p-0">
+                                <div className="relative h-full w-auto aspect-[3/4] flex items-center justify-center">
+                                    <img 
+                                        src={look.url} 
+                                        alt="Look" 
+                                        className="w-full h-full object-contain brightness-[1.08] contrast-[1.05] mix-blend-multiply" 
+                                        draggable={false}
+                                    />
                                 </div>
                             </div>
-                        </div>
-                    ))
-                )}
+                        ))
+                    )}
+                </div>
             </div>
+
+            {/* Draggable Bottom Sheet */}
+            <BottomSheet isOpen={isSheetOpen} onToggle={() => setIsSheetOpen(!isSheetOpen)}>
+                <div className="px-6 pb-safe pt-2 bg-white flex flex-col gap-6">
+                    
+                    {/* 1. ACTION BAR */}
+                    <div className="flex items-center justify-center gap-3 w-full mt-2">
+                        <button 
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                if (!isSheetOpen) setIsSheetOpen(true);
+                                setSheetMode(prev => prev === 'poses' ? 'products' : 'poses');
+                            }}
+                            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-full text-sm font-semibold transition-all ${sheetMode === 'poses' && isSheetOpen ? 'bg-black text-white shadow-md' : 'bg-surface-subtle text-text-primary hover:bg-gray-200'}`}
+                        >
+                            <UserIcon className="w-4 h-4" />
+                            Pose
+                        </button>
+                        <button 
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onRemix();
+                            }}
+                            className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-full text-sm font-semibold bg-surface-subtle text-text-primary hover:bg-gray-200 transition-all"
+                        >
+                            <SparklesIcon className="w-4 h-4" />
+                            Remix
+                        </button>
+                    </div>
+
+                    {/* 2. DYNAMIC CONTENT (Only visible when expanded) */}
+                    <AnimatePresence>
+                        {isSheetOpen && (
+                            <motion.div
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: 'auto' }}
+                                exit={{ opacity: 0, height: 0 }}
+                                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                                className="min-h-[120px] relative overflow-hidden pb-4"
+                            >
+                                <AnimatePresence mode="wait">
+                                    {sheetMode === 'products' ? (
+                                        <motion.div 
+                                            key="products"
+                                            initial={{ opacity: 0, x: -20 }}
+                                            animate={{ opacity: 1, x: 0 }}
+                                            exit={{ opacity: 0, x: 20 }}
+                                            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                                        >
+                                            <h2 className="text-lg font-bold text-text-primary mb-4">In this look</h2>
+                                            <div className="flex overflow-x-auto gap-4 pb-2 scrollbar-hide -mx-6 px-6">
+                                                {currentLookItems.length === 0 ? (
+                                                    <div className="w-full py-6 text-center bg-white rounded-xl border border-dashed border-border shadow-none">
+                                                        <p className="text-sm text-text-secondary">Base model only</p>
+                                                    </div>
+                                                ) : (
+                                                    currentLookItems.map((item, idx) => {
+                                                        const price = (item as Product).price;
+                                                        const brand = (item as Product).brand;
+                                                        
+                                                        return (
+                                                            <div 
+                                                                key={idx} 
+                                                                className={`flex-shrink-0 w-28 flex flex-col gap-2 ${brand ? 'cursor-pointer active:scale-95 transition-transform' : ''}`}
+                                                                onClick={() => {
+                                                                    if (brand) {
+                                                                        onProductSelect(item as Product);
+                                                                    }
+                                                                }}
+                                                            >
+                                                                <div className="aspect-[3/4] rounded-lg overflow-hidden bg-white border border-border shadow-soft">
+                                                                    <img src={item.url} alt={item.name} className="w-full h-full object-cover" />
+                                                                </div>
+                                                                <div className="space-y-0.5 px-0.5">
+                                                                    <p className="text-[11px] font-bold text-text-primary truncate uppercase tracking-wide">{brand || 'Custom'}</p>
+                                                                    <p className="text-[11px] text-text-secondary truncate leading-tight">{item.name}</p>
+                                                                    {price && (
+                                                                        <p className="text-[11px] font-medium text-text-primary mt-0.5">${price}</p>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        )
+                                                    })
+                                                )}
+                                            </div>
+                                        </motion.div>
+                                    ) : (
+                                        <motion.div 
+                                            key="poses"
+                                            initial={{ opacity: 0, x: 20 }}
+                                            animate={{ opacity: 1, x: 0 }}
+                                            exit={{ opacity: 0, x: -20 }}
+                                            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                                        >
+                                            <h2 className="text-lg font-bold text-text-primary mb-4">Select Pose</h2>
+                                            <div className="flex overflow-x-auto gap-3 pb-2 scrollbar-hide -mx-6 px-6">
+                                                {POSE_OPTIONS.map((pose, idx) => (
+                                                    <button
+                                                        key={idx}
+                                                        onClick={() => handlePoseClick(pose.instruction)}
+                                                        className="flex-shrink-0 flex flex-col items-center gap-2 w-20 group"
+                                                    >
+                                                        <div className="w-16 h-16 rounded-2xl bg-surface-subtle border border-border flex items-center justify-center transition-all group-hover:bg-black group-hover:text-white group-hover:shadow-md group-active:scale-95">
+                                                            <pose.icon className="w-7 h-7 stroke-1" />
+                                                        </div>
+                                                        <span className="text-[11px] font-medium text-text-primary text-center leading-tight">{pose.label}</span>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </motion.div>
+                                    )}
+                                </AnimatePresence>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+
+                </div>
+            </BottomSheet>
         </div>
+    );
+};
+
+// Bottom Sheet Component
+const BottomSheet: React.FC<{ children: React.ReactNode; isOpen: boolean; onToggle: () => void }> = ({ children, isOpen, onToggle }) => {
+    const [isExpanded, setIsExpanded] = useState(false);
+
+    useEffect(() => {
+        if (isOpen !== isExpanded) {
+            setIsExpanded(isOpen);
+        }
+    }, [isOpen]);
+
+    const handleDragEnd = (event: any, info: PanInfo) => {
+        if (info.offset.y < -30) { // Reduced threshold for easier opening
+             setIsExpanded(true);
+             onToggle();
+        } else if (info.offset.y > 30) {
+             setIsExpanded(false);
+             onToggle();
+        }
+    };
+
+    return (
+        <>
+            <motion.div 
+                className="absolute bottom-0 left-0 right-0 bg-white rounded-t-sheet shadow-float z-30 border-t border-border/50"
+                animate={{ height: isExpanded ? 'auto' : '80px' }}
+                initial={{ height: '80px' }}
+                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                drag="y"
+                dragConstraints={{ top: 0, bottom: 0 }}
+                dragElastic={0.1}
+                onDragEnd={handleDragEnd}
+            >
+                 <div className="w-full flex justify-center pt-3 pb-1 cursor-grab active:cursor-grabbing" onClick={() => {
+                     setIsExpanded(!isExpanded);
+                     onToggle();
+                 }}>
+                     <div className="w-10 h-1 bg-gray-200 rounded-full" />
+                 </div>
+                 
+                 <div className="overflow-hidden bg-white">
+                    {children}
+                 </div>
+            </motion.div>
+            
+             <AnimatePresence>
+                {isExpanded && (
+                    <motion.div 
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        onClick={() => {
+                            setIsExpanded(false);
+                            onToggle();
+                        }}
+                        className="absolute inset-0 bg-white/30 z-20 backdrop-blur-sm"
+                    />
+                )}
+             </AnimatePresence>
+        </>
     );
 };
 

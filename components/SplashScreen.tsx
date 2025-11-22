@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -8,7 +9,7 @@ import { motion } from 'framer-motion';
 const SplashScreen: React.FC = () => {
   return (
     <motion.div
-      className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-[#F5F5F7]"
+      className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-white"
       initial={{ opacity: 1 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}

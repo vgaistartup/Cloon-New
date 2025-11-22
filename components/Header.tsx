@@ -4,14 +4,17 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 import React, { useState } from 'react';
-import { UserIcon, SearchIcon } from './icons';
+import { UserIcon, SearchIcon, MessageCircleIcon } from './icons';
 
 interface HeaderProps {
   onOpenSettings?: () => void;
   onSearch: (query: string) => void;
+  onOpenChat?: () => void;
+  generationProgress: number; // 0 to 100
+  queueCount?: number;
 }
 
-const Header: React.FC<HeaderProps> = ({ onOpenSettings, onSearch }) => {
+const Header: React.FC<HeaderProps> = ({ onOpenSettings, onSearch, onOpenChat, generationProgress, queueCount = 0 }) => {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
 
@@ -26,15 +29,20 @@ const Header: React.FC<HeaderProps> = ({ onOpenSettings, onSearch }) => {
     onSearch('');
   };
 
+  // Calculate circle properties for progress bar
+  const radius = 9;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (generationProgress / 100) * circumference;
+
   return (
-    <header className="sticky top-0 w-full py-4 px-6 bg-[#F5F5F7]/80 backdrop-blur-xl border-b border-gray-200/50 z-40 transition-all duration-200">
-      <div className="flex items-center justify-between h-8">
+    <header className="sticky top-0 z-40 w-full h-[60px] min-h-[60px] px-4 bg-white/95 backdrop-blur-xl border-b border-border transition-all duration-200 flex items-center justify-center">
+      <div className="w-full flex items-center justify-between">
         {isSearchOpen ? (
            // Search Mode
            <form className="flex-1 flex items-center gap-3 animate-fade-in" onSubmit={(e) => e.preventDefault()}>
-             <SearchIcon className="w-5 h-5 text-gray-500" />
+             <SearchIcon className="w-5 h-5 text-text-primary" />
              <input 
-               className="flex-1 bg-transparent outline-none text-base font-medium text-gray-900 placeholder-gray-400"
+               className="flex-1 bg-transparent outline-none text-base font-medium text-text-primary placeholder-text-secondary"
                placeholder="Search products..."
                autoFocus
                value={query}
@@ -42,17 +50,17 @@ const Header: React.FC<HeaderProps> = ({ onOpenSettings, onSearch }) => {
              />
              <button 
                onClick={closeSearch} 
-               className="p-1 px-2 rounded-full hover:bg-gray-200/50"
+               className="p-1 px-3 rounded-full hover:bg-surface-subtle transition-colors"
              >
-                <span className="text-sm font-medium text-gray-600">Cancel</span>
+                <span className="text-sm font-medium text-text-primary">Cancel</span>
              </button>
            </form>
         ) : (
            // Normal Mode
            <>
              {/* Left: Logo */}
-             <div className="flex items-center select-none text-[#1D1D1F] -ml-1">
-                <svg viewBox="0 0 1100 290" className="h-6 w-auto text-[#1D1D1F] fill-current">
+             <div className="flex items-center select-none text-primary -ml-1">
+                <svg viewBox="0 0 1100 290" className="h-6 w-auto text-primary fill-current">
                     {/* C */}
                     <path d="M50 144.945C50 122.736 55.1168 102.813 65.3505 85.1762C75.8018 67.5395 89.8458 53.822 107.483 44.0239C125.337 34.008 144.824 29 165.945 29C190.114 29 211.561 34.9878 230.286 46.9633C249.229 58.7211 262.947 75.4869 271.438 97.2605H226.693C220.815 85.285 212.649 76.3578 202.198 70.4789C191.747 64.6 179.662 61.6606 165.945 61.6606C150.921 61.6606 137.53 65.0355 125.772 71.7853C114.015 78.5352 104.761 88.2245 98.011 100.853C91.4789 113.482 88.2128 128.179 88.2128 144.945C88.2128 161.711 91.4789 176.408 98.011 189.037C104.761 201.665 114.015 211.464 125.772 218.431C137.53 225.181 150.921 228.556 165.945 228.556C179.662 228.556 191.747 225.616 202.198 219.738C212.649 213.859 220.815 204.931 226.693 192.956H271.438C262.947 214.73 249.229 231.495 230.286 243.253C211.561 255.011 190.114 260.89 165.945 260.89C144.607 260.89 125.119 255.991 107.483 246.193C89.8458 236.177 75.8018 222.35 65.3505 204.714C55.1168 187.077 50 167.154 50 144.945Z" fill="currentColor"/>
                     {/* L */}
@@ -67,18 +75,69 @@ const Header: React.FC<HeaderProps> = ({ onOpenSettings, onSearch }) => {
              </div>
 
              {/* Right: Actions */}
-             <div className="flex items-center gap-1">
+             <div className="flex items-center gap-2">
+                {/* Progress Indicator with Queue Count */}
+                {queueCount > 0 && (
+                    <div className="p-2 flex items-center justify-center">
+                         <svg className="w-6 h-6 transform -rotate-90" viewBox="0 0 24 24">
+                            {/* Track */}
+                            <circle
+                                className="text-surface-subtle"
+                                strokeWidth="3"
+                                stroke="currentColor"
+                                fill="transparent"
+                                r={radius}
+                                cx="12"
+                                cy="12"
+                            />
+                            {/* Progress */}
+                            <circle
+                                className="text-black transition-all duration-300 ease-in-out"
+                                strokeWidth="3"
+                                strokeDasharray={circumference}
+                                strokeDashoffset={offset}
+                                strokeLinecap="round"
+                                stroke="currentColor"
+                                fill="transparent"
+                                r={radius}
+                                cx="12"
+                                cy="12"
+                            />
+                            {/* Queue Count */}
+                            <text 
+                              x="12" 
+                              y="12" 
+                              className="text-[9px] font-bold fill-current text-black" 
+                              textAnchor="middle" 
+                              dominantBaseline="central"
+                              transform="rotate(90 12 12)" // Counter-rotate the text so it's upright
+                            >
+                              {queueCount}
+                            </text>
+                        </svg>
+                    </div>
+                )}
+
                 <button 
                     onClick={() => setIsSearchOpen(true)} 
-                    className="p-2 rounded-full hover:bg-black/5 text-gray-700 transition-colors"
+                    className="p-2.5 rounded-full bg-transparent hover:bg-surface-subtle text-text-primary transition-colors"
                     aria-label="Search"
                 >
                    <SearchIcon className="w-5 h-5" />
                 </button>
+                {onOpenChat && (
+                    <button 
+                        onClick={onOpenChat} 
+                        className="p-2.5 rounded-full bg-transparent hover:bg-surface-subtle text-text-primary transition-colors"
+                        aria-label="Chat Stylist"
+                    >
+                       <MessageCircleIcon className="w-5 h-5" />
+                    </button>
+                )}
                 {onOpenSettings && (
                     <button 
                         onClick={onOpenSettings} 
-                        className="p-2 rounded-full hover:bg-black/5 text-gray-700 transition-colors -mr-2"
+                        className="p-2.5 rounded-full bg-transparent hover:bg-surface-subtle text-text-primary transition-colors -mr-2"
                         aria-label="Menu"
                     >
                        <UserIcon className="w-6 h-6" />

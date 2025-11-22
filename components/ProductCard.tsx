@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -16,25 +17,25 @@ interface ProductCardProps {
 const ProductCard: React.FC<ProductCardProps> = ({ product, onProductSelect, isFavorite, onToggleFavorite }) => {
     return (
         <div className="flex flex-col gap-3 group cursor-pointer" onClick={() => onProductSelect(product)}>
-            <div className="relative aspect-[3/4] w-full overflow-hidden rounded-xl bg-white">
+            <div className="relative aspect-[3/4] w-full overflow-hidden rounded-card bg-white shadow-soft border border-border hover:shadow-elevated transition-shadow duration-300">
                 <img 
                     src={product.url} 
                     alt={product.name} 
-                    className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-105"
+                    className="h-full w-full object-cover transition-transform duration-700 ease-[cubic-bezier(0.25,1,0.5,1)] group-hover:scale-105"
                 />
             </div>
             
             <div className="flex justify-between items-start px-1">
                 <div className="flex flex-col gap-0.5">
-                    <h3 className="text-sm font-medium text-gray-900">{product.brand}</h3>
+                    <h3 className="text-sm font-semibold text-text-primary">{product.brand}</h3>
                     <div className="flex items-baseline gap-2">
                          {product.salePrice ? (
                             <>
                                 <p className="text-sm font-medium text-red-600">${product.salePrice}</p>
-                                <p className="text-xs font-medium text-gray-400 line-through">${product.price}</p>
+                                <p className="text-xs font-medium text-text-secondary line-through opacity-60">${product.price}</p>
                             </>
                         ) : (
-                            <p className="text-sm font-medium text-gray-600">${product.price}</p>
+                            <p className="text-sm font-medium text-text-secondary">${product.price}</p>
                         )}
                     </div>
                 </div>
@@ -43,7 +44,7 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onProductSelect, isF
                         e.stopPropagation();
                         onToggleFavorite();
                     }}
-                    className={`p-1 transition-colors ${isFavorite ? 'text-black' : 'text-gray-400 hover:text-black'}`}
+                    className={`p-1 transition-colors ${isFavorite ? 'text-black' : 'text-text-secondary hover:text-black'}`}
                     aria-label="Toggle favorite"
                 >
                     <HeartIcon 

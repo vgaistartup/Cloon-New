@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
+import { Product } from "./data/products";
+
 export interface WardrobeItem {
   id: string;
   name: string;
@@ -18,6 +20,25 @@ export interface OutfitLayer {
 export interface Look {
     id: string;
     url: string;
-    items: string[];
+    garments: WardrobeItem[];
+    timestamp: number;
+    userId?: string;
+}
+
+export interface Model {
+    id: string;
+    url: string;
+    userId: string;
+    createdAt: number;
+}
+
+export type GenerationTaskType = 'try-on' | 'remix' | 'pose';
+
+export interface GenerationTask {
+    id: string;
+    type: GenerationTaskType;
+    items?: (Product | WardrobeItem)[]; // For try-on and remix
+    lookId?: string; // For pose
+    poseInstruction?: string; // For pose
     timestamp: number;
 }
