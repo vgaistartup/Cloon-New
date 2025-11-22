@@ -9,6 +9,7 @@ import { DotsVerticalIcon, RotateCcwIcon, ShareIcon, Trash2Icon, PlusIcon, UserI
 import { motion, AnimatePresence, PanInfo } from 'framer-motion';
 import { Look } from '../types';
 import { Product } from '../data/products';
+import { VIBE_OPTIONS } from '../data/vibes';
 
 interface MyLooksProps {
     looks: Look[];
@@ -21,13 +22,15 @@ interface MyLooksProps {
     initialLookId?: string | null;
     onResetInitialLookId?: () => void;
     onRemix: () => void;
-    onPoseSelect?: (lookId: string, poseInstruction: string) => void;
+    onPoseSelect?: (lookId: string, config: { pose?: string, vibe?: string }) => void;
     generationProgress: number;
     queueCount?: number;
     onClose: () => void;
 }
 
 type SortOrder = 'newest' | 'oldest';
+type SheetMode = 'products' | 'edit';
+type EditTab = 'body' | 'vibe';
 
 const POSE_OPTIONS = [
     { label: 'Frontal', instruction: 'Full frontal view, hands on hips', icon: SkeletonFrontIcon },
@@ -45,7 +48,11 @@ const MyLooks: React.FC<MyLooksProps> = ({ looks, products, modelImageUrl, onMod
     
     // Bottom Sheet State
     const [isSheetOpen, setIsSheetOpen] = useState(false);
-    const [sheetMode, setSheetMode] = useState<'products' | 'poses'>('products');
+    const [sheetMode, setSheetMode] = useState<SheetMode>('products');
+    const [editTab, setEditTab] = useState<EditTab>('body');
+    
+    // Selected Vibe State (Ephemeral for UI, logic handles actual update)
+    const [selectedVibeId, setSelectedVibeId] = useState<string | null>(null);
 
     // Look Counter Auto-Hide State
     const [isCountVisible, setIsCountVisible] = useState(false);
@@ -111,6 +118,8 @@ const MyLooks: React.FC<MyLooksProps> = ({ looks, products, modelImageUrl, onMod
     // Reset sheet mode when changing looks
     useEffect(() => {
         setSheetMode('products');
+        setEditTab('body');
+        setSelectedVibeId(null);
     }, [activeIndex]);
 
     const currentLookItems = useMemo(() => {
@@ -125,38 +134,66 @@ const MyLooks: React.FC<MyLooksProps> = ({ looks, products, modelImageUrl, onMod
         const currentLook = sortedLooks[activeIndex];
         if (!currentLook) return;
         
-        const shareData = {
-            title: 'My Look on Cloon',
-            text: 'Check out this outfit I created with AI!',
-            url: currentLook.url
-        };
+        setIsMenuOpen(false);
 
         try {
-            if (navigator.share) {
-                await navigator.share(shareData);
+            if (currentLook.url.startsWith('data:')) {
+                // It's a base64 image (generated). Convert to File for sharing.
+                const response = await fetch(currentLook.url);
+                const blob = await response.blob();
+                const file = new File([blob], `cloon-look-${currentLook.id}.png`, { type: 'image/png' });
+
+                if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                    await navigator.share({
+                        files: [file],
+                        title: 'My Look on Cloon',
+                        text: 'Check out this outfit I created with AI!',
+                    });
+                } else {
+                    // Fallback: Download if file sharing isn't supported
+                    const link = document.createElement('a');
+                    link.href = currentLook.url;
+                    link.download = `cloon-look-${currentLook.id}.png`;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    alert("Image saved to your device!");
+                }
             } else {
-                await navigator.clipboard.writeText(currentLook.url);
-                alert("Look URL copied to clipboard!");
+                // Regular URL (hosted image)
+                if (navigator.share) {
+                    await navigator.share({
+                        title: 'My Look on Cloon',
+                        text: 'Check out this outfit I created with AI!',
+                        url: currentLook.url
+                    });
+                } else {
+                    await navigator.clipboard.writeText(currentLook.url);
+                    alert("Look URL copied to clipboard!");
+                }
             }
         } catch (err) {
             console.error('Error sharing:', err);
-            try {
-                await navigator.clipboard.writeText(currentLook.url);
-                alert("Look URL copied to clipboard!");
-            } catch (e) {}
+            // Last resort fallback
+            if (!currentLook.url.startsWith('data:')) {
+                try {
+                    await navigator.clipboard.writeText(currentLook.url);
+                    alert("Look URL copied to clipboard!");
+                } catch (e) {}
+            } else {
+                 alert("Unable to share image. Try taking a screenshot!");
+            }
         }
-        setIsMenuOpen(false);
     };
     
     const handleDeleteCurrentLook = () => {
         setIsMenuOpen(false);
         const currentLook = sortedLooks[activeIndex];
         if (currentLook) {
-            if (window.confirm("Are you sure you want to delete this look? This action cannot be undone.")) {
-                onDeleteLook(currentLook.id);
-                if (activeIndex > 0) {
-                    setActiveIndex(prev => prev - 1);
-                }
+            // Removed blocking confirm dialog
+            onDeleteLook(currentLook.id);
+            if (activeIndex > 0) {
+                setActiveIndex(prev => prev - 1);
             }
         }
     };
@@ -164,8 +201,17 @@ const MyLooks: React.FC<MyLooksProps> = ({ looks, products, modelImageUrl, onMod
     const handlePoseClick = (instruction: string) => {
         const currentLook = sortedLooks[activeIndex];
         if (currentLook && onPoseSelect) {
-            onPoseSelect(currentLook.id, instruction);
-            // Reset UI state
+            onPoseSelect(currentLook.id, { pose: instruction });
+            // Reset UI state to default
+            setSheetMode('products');
+        }
+    };
+
+    const handleVibeClick = (vibeId: string, prompt: string) => {
+        const currentLook = sortedLooks[activeIndex];
+        setSelectedVibeId(vibeId);
+        if (currentLook && onPoseSelect) {
+            onPoseSelect(currentLook.id, { vibe: prompt });
             setSheetMode('products');
         }
     };
@@ -182,7 +228,13 @@ const MyLooks: React.FC<MyLooksProps> = ({ looks, products, modelImageUrl, onMod
 
     if (!modelImageUrl) {
         return (
-            <div className="h-full w-full bg-white flex flex-col">
+            <div className="h-full w-full bg-white flex flex-col relative">
+                 <button 
+                    onClick={onClose} 
+                    className="absolute top-4 left-4 z-[60] p-2 rounded-full hover:bg-surface-subtle transition-colors"
+                 >
+                    <XIcon className="w-6 h-6 text-text-primary" />
+                 </button>
                  <div className="px-6 pt-4 pb-2"></div>
                  <StartScreen onModelFinalized={onModelFinalized} />
             </div>
@@ -370,12 +422,12 @@ const MyLooks: React.FC<MyLooksProps> = ({ looks, products, modelImageUrl, onMod
                             onClick={(e) => {
                                 e.stopPropagation();
                                 if (!isSheetOpen) setIsSheetOpen(true);
-                                setSheetMode(prev => prev === 'poses' ? 'products' : 'poses');
+                                setSheetMode(prev => prev === 'edit' ? 'products' : 'edit');
                             }}
-                            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-full text-sm font-semibold transition-all ${sheetMode === 'poses' && isSheetOpen ? 'bg-black text-white shadow-md' : 'bg-surface-subtle text-text-primary hover:bg-gray-200'}`}
+                            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-full text-sm font-semibold transition-all ${sheetMode === 'edit' && isSheetOpen ? 'bg-black text-white shadow-md' : 'bg-surface-subtle text-text-primary hover:bg-gray-200'}`}
                         >
                             <UserIcon className="w-4 h-4" />
-                            Pose
+                            Edit
                         </button>
                         <button 
                             onClick={(e) => {
@@ -397,7 +449,7 @@ const MyLooks: React.FC<MyLooksProps> = ({ looks, products, modelImageUrl, onMod
                                 animate={{ opacity: 1, height: 'auto' }}
                                 exit={{ opacity: 0, height: 0 }}
                                 transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-                                className="min-h-[120px] relative overflow-hidden pb-4"
+                                className="min-h-[160px] relative overflow-hidden pb-4"
                             >
                                 <AnimatePresence mode="wait">
                                     {sheetMode === 'products' ? (
@@ -447,26 +499,74 @@ const MyLooks: React.FC<MyLooksProps> = ({ looks, products, modelImageUrl, onMod
                                         </motion.div>
                                     ) : (
                                         <motion.div 
-                                            key="poses"
+                                            key="edit"
                                             initial={{ opacity: 0, x: 20 }}
                                             animate={{ opacity: 1, x: 0 }}
                                             exit={{ opacity: 0, x: -20 }}
                                             transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                                            className="flex flex-col gap-4"
                                         >
-                                            <h2 className="text-lg font-bold text-text-primary mb-4">Select Pose</h2>
-                                            <div className="flex overflow-x-auto gap-3 pb-2 scrollbar-hide -mx-6 px-6">
-                                                {POSE_OPTIONS.map((pose, idx) => (
-                                                    <button
-                                                        key={idx}
-                                                        onClick={() => handlePoseClick(pose.instruction)}
-                                                        className="flex-shrink-0 flex flex-col items-center gap-2 w-20 group"
-                                                    >
-                                                        <div className="w-16 h-16 rounded-2xl bg-surface-subtle border border-border flex items-center justify-center transition-all group-hover:bg-black group-hover:text-white group-hover:shadow-md group-active:scale-95">
-                                                            <pose.icon className="w-7 h-7 stroke-1" />
-                                                        </div>
-                                                        <span className="text-[11px] font-medium text-text-primary text-center leading-tight">{pose.label}</span>
-                                                    </button>
-                                                ))}
+                                            {/* Segmented Control */}
+                                            <div className="bg-surface-subtle p-1 rounded-lg self-start flex gap-1">
+                                                <button
+                                                    onClick={() => setEditTab('body')}
+                                                    className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${editTab === 'body' ? 'bg-white shadow-sm text-black' : 'text-text-secondary hover:text-text-primary'}`}
+                                                >
+                                                    Body
+                                                </button>
+                                                <button
+                                                    onClick={() => setEditTab('vibe')}
+                                                    className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${editTab === 'vibe' ? 'bg-white shadow-sm text-black' : 'text-text-secondary hover:text-text-primary'}`}
+                                                >
+                                                    Vibe
+                                                </button>
+                                            </div>
+
+                                            <div className="min-h-[120px]">
+                                                {editTab === 'body' ? (
+                                                    <div className="flex overflow-x-auto gap-3 pb-2 scrollbar-hide -mx-6 px-6 animate-fade-in">
+                                                        {POSE_OPTIONS.map((pose, idx) => (
+                                                            <button
+                                                                key={idx}
+                                                                onClick={() => handlePoseClick(pose.instruction)}
+                                                                className="flex-shrink-0 flex flex-col items-center gap-2 w-20 group"
+                                                            >
+                                                                <div className="w-16 h-16 rounded-2xl bg-surface-subtle border border-border flex items-center justify-center transition-all group-hover:bg-black group-hover:text-white group-hover:shadow-md group-active:scale-95">
+                                                                    <pose.icon className="w-7 h-7 stroke-1" />
+                                                                </div>
+                                                                <span className="text-[11px] font-medium text-text-primary text-center leading-tight">{pose.label}</span>
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    <div className="flex overflow-x-auto gap-3 pb-2 scrollbar-hide -mx-6 px-6 animate-fade-in">
+                                                        {VIBE_OPTIONS.map((vibe, idx) => {
+                                                            const isSelected = selectedVibeId === vibe.id;
+                                                            return (
+                                                                <button
+                                                                    key={vibe.id}
+                                                                    onClick={() => handleVibeClick(vibe.id, vibe.promptSuffix)}
+                                                                    className="flex-shrink-0 flex flex-col items-center gap-2 w-20 group"
+                                                                >
+                                                                    <div 
+                                                                        className={`w-20 h-20 rounded-2xl overflow-hidden relative transition-all group-active:scale-95 ${isSelected ? 'ring-2 ring-black ring-offset-2' : 'border border-transparent'}`}
+                                                                    >
+                                                                        <img 
+                                                                            src={vibe.thumbnailUrl} 
+                                                                            alt={vibe.label} 
+                                                                            className="w-full h-full object-cover"
+                                                                        />
+                                                                        {/* Selected Border Overlay if using internal border style */}
+                                                                        {isSelected && (
+                                                                            <div className="absolute inset-0 border-[3px] border-black rounded-2xl pointer-events-none" />
+                                                                        )}
+                                                                    </div>
+                                                                    <span className={`text-[11px] font-medium text-center leading-tight ${isSelected ? 'text-black font-bold' : 'text-text-primary'}`}>{vibe.label}</span>
+                                                                </button>
+                                                            )
+                                                        })}
+                                                    </div>
+                                                )}
                                             </div>
                                         </motion.div>
                                     )}

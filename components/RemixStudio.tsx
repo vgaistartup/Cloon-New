@@ -5,7 +5,7 @@
 */
 import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ShirtIcon, PantsIcon, ShoeIcon, AccessoryIcon, SparklesIcon, XIcon, LockIcon, UnlockIcon, UploadCloudIcon, SearchIcon, ChevronDownIcon } from './icons';
+import { ShirtIcon, PantsIcon, ShoeIcon, AccessoryIcon, SparklesIcon, XIcon, LockIcon, UnlockIcon, UploadCloudIcon, SearchIcon, ChevronDownIcon, ShoppingBagIcon } from './icons';
 import { Product, ProductCategory, PRODUCT_CATEGORIES_CONFIG } from '../data/products';
 import { WardrobeItem } from '../types';
 
@@ -16,9 +16,11 @@ interface RemixStudioProps {
   onCreateLook: (items: (Product | WardrobeItem)[]) => void;
   generationProgress: number;
   queueCount?: number;
+  onUpload?: (file: File) => Promise<WardrobeItem | undefined>;
 }
 
 type SlotId = 'top' | 'bottom' | 'shoes' | 'accessory';
+type PickerCategory = SlotId | 'wardrobe';
 
 interface SlotConfig {
   id: SlotId;
@@ -76,10 +78,11 @@ const CATEGORY_ICONS: Record<string, React.ElementType> = {
     'top': ShirtIcon,
     'bottom': PantsIcon,
     'shoes': ShoeIcon,
-    'accessory': AccessoryIcon
+    'accessory': AccessoryIcon,
+    'wardrobe': ShoppingBagIcon
 };
 
-const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, onCreateLook, generationProgress, queueCount = 0 }) => {
+const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, onCreateLook, generationProgress, queueCount = 0, onUpload }) => {
   const [selections, setSelections] = useState<Record<SlotId, Product | WardrobeItem | null>>({
     top: null,
     bottom: null,
@@ -95,21 +98,25 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
 
   // Picker State
   const [isPickerOpen, setIsPickerOpen] = useState(false);
-  const [pickerActiveCategory, setPickerActiveCategory] = useState<SlotId>('top');
+  const [pickerActiveCategory, setPickerActiveCategory] = useState<PickerCategory>('top');
   const [pickerActiveSubCategory, setPickerActiveSubCategory] = useState<string>('All');
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   const handleSelectProduct = (item: Product | WardrobeItem) => {
-      let targetSlot = pickerActiveCategory;
+      let targetSlot: SlotId = 'top'; // Default fallback
       
-      // If Global Search is active, or if the item has a category, ensure it goes to the right slot
-      // e.g. User searches "Sneakers" while on "Top" tab -> should go to "Shoes" slot.
+      // 1. Try to infer slot from category
       if ((item as Product).category) {
           const detectedSlot = getSlotIdFromCategory((item as Product).category);
           if (detectedSlot) {
               targetSlot = detectedSlot;
           }
+      } 
+      // 2. If no category (e.g. raw wardrobe item) or currently in wardrobe tab,
+      // fallback to the last active "slot" context. 
+      else if (pickerActiveCategory !== 'wardrobe') {
+          targetSlot = pickerActiveCategory;
       }
 
       setSelections(prev => ({ ...prev, [targetSlot]: item }));
@@ -167,15 +174,25 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.files && e.target.files[0]) {
           const file = e.target.files[0];
-          const customItem: WardrobeItem = {
-              id: `custom-${Date.now()}`,
-              name: file.name,
-              url: URL.createObjectURL(file)
-          };
-          handleSelectProduct(customItem);
+          
+          if (onUpload) {
+              // Use the provided onUpload which handles AI analysis and returns the item with metadata
+              const newItem = await onUpload(file);
+              if (newItem) {
+                  handleSelectProduct(newItem);
+              }
+          } else {
+              // Fallback behavior if onUpload is not provided
+              const customItem: WardrobeItem = {
+                  id: `custom-${Date.now()}`,
+                  name: file.name,
+                  url: URL.createObjectURL(file)
+              };
+              handleSelectProduct(customItem);
+          }
       }
   };
 
@@ -183,13 +200,25 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
       // 1. Global Search (Overrides Category Filters)
       if (searchQuery.trim()) {
           const query = searchQuery.toLowerCase();
-          return products.filter(p => 
+          // Search both products and wardrobe
+          const matchedProducts = products.filter(p => 
               p.name.toLowerCase().includes(query) || 
               p.brand.toLowerCase().includes(query)
           );
+          const matchedWardrobe = wardrobe.filter(w => 
+               w.name.toLowerCase().includes(query)
+          );
+          return [...matchedProducts, ...matchedWardrobe];
       }
 
-      // 2. Filter by top-level category
+      // 2. Wardrobe Category
+      if (pickerActiveCategory === 'wardrobe') {
+          // Filter wardrobe items based on subCategory (if we had subcats for wardrobe)
+          // For now, Wardrobe just shows everything or we could filter by 'All'
+          return wardrobe;
+      }
+
+      // 3. Filter by top-level product category
       let filtered = products;
       if (pickerActiveCategory === 'top') {
           filtered = products.filter(p => p.category === 'top' || p.category === 'outerwear');
@@ -197,7 +226,7 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
           filtered = products.filter(p => p.category === pickerActiveCategory);
       }
 
-      // 3. Filter by sub-category if not 'All'
+      // 4. Filter by sub-category if not 'All'
       if (pickerActiveSubCategory !== 'All') {
           filtered = filtered.filter(p => {
               if (p.subCategory === pickerActiveSubCategory) return true;
@@ -210,9 +239,14 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
       }
 
       return filtered;
-  }, [pickerActiveCategory, pickerActiveSubCategory, products, searchQuery]);
+  }, [pickerActiveCategory, pickerActiveSubCategory, products, wardrobe, searchQuery]);
 
-  const activeCategoryConfig = PRODUCT_CATEGORIES_CONFIG.find(c => c.id === pickerActiveCategory)!;
+  // Get subcategories based on active category
+  const activeSubCategories = useMemo(() => {
+      if (pickerActiveCategory === 'wardrobe') return ['All'];
+      const config = PRODUCT_CATEGORIES_CONFIG.find(c => c.id === pickerActiveCategory);
+      return config ? config.subCategories : ['All'];
+  }, [pickerActiveCategory]);
   
   // Logic for Header Title
   let headerTitle = "Look Studio";
@@ -224,7 +258,8 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
               top: 'Top',
               bottom: 'Bottoms',
               shoes: 'Shoes',
-              accessory: 'Accessories'
+              accessory: 'Accessories',
+              wardrobe: 'My Wardrobe'
           };
           headerTitle = titles[pickerActiveCategory] || 'Select Item';
       }
@@ -281,7 +316,7 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
         </div>
 
         {/* Right Action: Search Toggle (Picker) or Spinner (Grid) */}
-        <div className="w-10 flex items-center justify-end">
+        <div className="w-auto min-w-[40px] flex items-center justify-end">
             {isPickerOpen ? (
                  <button 
                     onClick={() => {
@@ -401,8 +436,23 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
                     transition={{ type: "spring", damping: 25, stiffness: 200 }}
                     className="absolute inset-0 z-10 bg-white flex flex-col"
                   >
-                      {/* 1. Category Icons Row - Removed Text, Increased Size */}
+                      {/* 1. Category Icons Row */}
                       <div className="flex items-center justify-around p-6 border-b border-border shrink-0 bg-white">
+                            {/* Wardrobe Icon */}
+                             <button 
+                                onClick={() => {
+                                    setPickerActiveCategory('wardrobe');
+                                    setPickerActiveSubCategory('All');
+                                    setIsSearchOpen(false);
+                                    setSearchQuery('');
+                                }}
+                                className={`transition-all duration-200 flex flex-col items-center ${pickerActiveCategory === 'wardrobe' ? 'opacity-100 scale-110 text-black' : 'opacity-30 hover:opacity-50 text-gray-900'}`}
+                                aria-label="My Wardrobe"
+                            >
+                                <ShoppingBagIcon className="w-16 h-16" />
+                            </button>
+
+                            {/* Product Categories */}
                             {PRODUCT_CATEGORIES_CONFIG.map((cat) => {
                                 const isActive = pickerActiveCategory === cat.id;
                                 const IconComponent = CATEGORY_ICONS[cat.id] || ShirtIcon;
@@ -427,7 +477,7 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
                       {/* 2. Sub-category Pills */}
                       <div className="px-4 py-4 border-b border-border overflow-x-auto scrollbar-hide shrink-0 bg-surface-subtle">
                             <div className="flex gap-4">
-                                {activeCategoryConfig.subCategories.map((sub) => (
+                                {activeSubCategories.map((sub) => (
                                     <button
                                         key={sub}
                                         onClick={() => setPickerActiveSubCategory(sub)}
@@ -455,39 +505,32 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
                                     <input type="file" className="hidden" accept="image/*" onChange={handleFileUpload} />
                               </label>
 
-                              {/* Wardrobe Items - Only show if no search query and 'All' subcategory selected */}
-                              {pickerActiveSubCategory === 'All' && !searchQuery && wardrobe
-                                .filter(w => !w.id.startsWith('prod'))
-                                .map(item => (
-                                   <div 
-                                    key={item.id}
-                                    onClick={() => handleSelectProduct(item)}
-                                    className="flex flex-col gap-2 cursor-pointer group"
-                                  >
-                                      <div className="aspect-[3/4] bg-white rounded-card border border-border overflow-hidden shadow-sm hover:shadow-md transition-all">
-                                          <img src={item.url} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" alt={item.name} />
-                                      </div>
-                                      <div className="px-1">
-                                        <p className="text-xs font-bold uppercase tracking-wide text-gray-400">Wardrobe</p>
-                                        <p className="text-sm font-medium text-text-primary truncate">{item.name}</p>
-                                      </div>
-                                  </div>
-                              ))}
-
-                              {/* Product Items */}
-                              {displayedProducts.map(product => {
+                              {/* Render Items */}
+                              {displayedProducts.map(item => {
                                   // Determine correct slot for indicator check
-                                  const targetSlot = getSlotIdFromCategory(product.category) || pickerActiveCategory;
-                                  const isSelected = selections[targetSlot]?.id === product.id;
+                                  let targetSlot: SlotId = 'top';
+                                  // Try to deduce slot from category
+                                  if ((item as Product).category) {
+                                      const detected = getSlotIdFromCategory((item as Product).category);
+                                      if (detected) targetSlot = detected;
+                                  } else if (pickerActiveCategory !== 'wardrobe') {
+                                      // If browsing specific slot category, use that
+                                      targetSlot = pickerActiveCategory as SlotId;
+                                  }
+                                  
+                                  const isSelected = selections[targetSlot]?.id === item.id;
+                                  // Check if it's a product or wardrobe item for price rendering
+                                  const price = (item as Product).price;
+                                  const brand = (item as Product).brand;
 
                                   return (
                                       <div 
-                                        key={product.id}
-                                        onClick={() => handleSelectProduct(product)}
+                                        key={item.id}
+                                        onClick={() => handleSelectProduct(item)}
                                         className="flex flex-col gap-2 cursor-pointer group"
                                       >
                                           <div className="aspect-[3/4] bg-white rounded-card border border-border overflow-hidden shadow-sm hover:shadow-md transition-all relative">
-                                              <img src={product.url} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" alt={product.name} />
+                                              <img src={item.url} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" alt={item.name} />
                                               
                                               {/* Active Indicator */}
                                               {isSelected && (
@@ -497,10 +540,14 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
                                               )}
                                           </div>
                                           <div className="px-1">
-                                            <p className="text-xs font-bold uppercase tracking-wide text-text-secondary">{product.brand}</p>
+                                            {brand ? (
+                                                <p className="text-xs font-bold uppercase tracking-wide text-text-secondary">{brand}</p>
+                                            ) : (
+                                                <p className="text-xs font-bold uppercase tracking-wide text-gray-400">Wardrobe</p>
+                                            )}
                                             <div className="flex justify-between items-baseline">
-                                                <p className="text-sm font-medium text-text-primary truncate flex-1 mr-2">{product.name}</p>
-                                                <p className="text-sm font-semibold text-text-primary">${product.price}</p>
+                                                <p className="text-sm font-medium text-text-primary truncate flex-1 mr-2">{item.name}</p>
+                                                {price && <p className="text-sm font-semibold text-text-primary">${price}</p>}
                                             </div>
                                           </div>
                                       </div>
@@ -508,7 +555,7 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
                               })}
                           </div>
                           
-                          {displayedProducts.length === 0 && (pickerActiveSubCategory !== 'All' || wardrobe.length === 0 || searchQuery) && (
+                          {displayedProducts.length === 0 && (
                               <div className="flex flex-col items-center justify-center py-12 text-gray-400">
                                   <SearchIcon className="w-12 h-12 mb-3 opacity-20" />
                                   <p className="text-sm font-medium">No items found</p>

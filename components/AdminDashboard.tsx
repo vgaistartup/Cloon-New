@@ -58,7 +58,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack }) => {
             }
         }
         
-        // Clean affiliate link to show placeholder if it's just '#'
         const affiliateLink = (product?.affiliateLink === '#' || !product?.affiliateLink) ? '' : product.affiliateLink;
 
         setEditingProduct({ 
@@ -122,14 +121,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack }) => {
     };
 
     const handleDelete = async (productId: string) => {
-        if (window.confirm('Are you sure you want to delete this product?')) {
-            try {
-                await productService.deleteProduct(productId);
-                await loadProducts();
-            } catch (error) {
-                console.error("Failed to delete product:", error);
-                alert(getFriendlyErrorMessage(error, "Could not delete product from the database"));
-            }
+        // Removed blocking confirm dialog
+        try {
+            await productService.deleteProduct(productId);
+            await loadProducts();
+        } catch (error: any) {
+            console.error("Failed to delete product:", error);
+            const message = error.message || "Unknown error";
+            alert(`Could not delete product. ${message}`);
         }
     };
     
@@ -187,18 +186,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack }) => {
         setDraggedItemIndex(null);
     };
     
-    // Logic to determine available subcategories based on selected main category
     const availableSubCategories = React.useMemo(() => {
         if (!editingProduct?.category) return [];
-        
-        // Map detailed config IDs to the broad categories used in the product model
         let configId = editingProduct.category;
-        if (editingProduct.category === 'outerwear') configId = 'top'; // Map outerwear to 'top' config for now or handle separately if config supports it
+        if (editingProduct.category === 'outerwear') configId = 'top';
         
         const config = PRODUCT_CATEGORIES_CONFIG.find(c => c.id === configId) || PRODUCT_CATEGORIES_CONFIG.find(c => c.id === 'top');
         
         if (!config && editingProduct.category === 'outerwear') {
-             // Return a default set or the Top set
              return PRODUCT_CATEGORIES_CONFIG.find(c => c.id === 'top')?.subCategories || [];
         }
         
@@ -226,7 +221,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack }) => {
 
                 {isLoading ? <div className="flex justify-center items-center h-64"><Spinner /></div> : (
                     <>
-                        {/* Desktop Table View */}
                         <div className="bg-white shadow-soft border border-border rounded-card overflow-hidden hidden md:block">
                             <table className="min-w-full leading-normal">
                                 <thead>
@@ -280,7 +274,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack }) => {
                             </table>
                         </div>
 
-                        {/* Mobile Card View */}
                         <div className="md:hidden space-y-4">
                             {products.map(product => (
                                 <div key={product.id} className="bg-white rounded-card shadow-soft border border-border p-4">
@@ -319,7 +312,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack }) => {
                             <input type="text" name="name" value={editingProduct.name || ''} onChange={handleInputChange} placeholder="Product Name" className="w-full p-3.5 bg-surface-subtle border-transparent rounded-btn focus:bg-white focus:border-border focus:shadow-soft outline-none transition-all" />
                             <input type="text" name="brand" value={editingProduct.brand || ''} onChange={handleInputChange} placeholder="Brand" className="w-full p-3.5 bg-surface-subtle border-transparent rounded-btn focus:bg-white focus:border-border focus:shadow-soft outline-none transition-all" />
                             
-                            {/* Category Selectors Row */}
                             <div className="flex flex-col sm:flex-row gap-3">
                                 <div className="relative flex-1">
                                     <select 
@@ -337,7 +329,6 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack }) => {
                                     </div>
                                 </div>
                                 
-                                {/* Subcategory Selector */}
                                 <div className="relative flex-1">
                                     <select 
                                         name="subCategory" 

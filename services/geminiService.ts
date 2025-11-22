@@ -5,6 +5,7 @@
 */
 
 import { GoogleGenAI, GenerateContentResponse, Modality, Chat, Type } from "@google/genai";
+import { WardrobeItem } from "../types";
 
 // Models Configuration
 const PRIMARY_MODEL = 'gemini-3-pro-image-preview';
@@ -139,7 +140,6 @@ const generateWithFallback = async (
         console.log(`[Gemini Service] ${logContext} - Attempting with ${PRIMARY_MODEL}...`);
         
         // Race condition: If model takes > 50s, assume stuck/cancelled and trigger fallback manually
-        // This handles the "Thread is cancelled" 503 errors gracefully by preempting them or catching them
         const response = await Promise.race([
             ai.models.generateContent({
                 model: PRIMARY_MODEL,
@@ -260,6 +260,69 @@ const generateItemDescription = async (file: File): Promise<{ category: 'Major' 
     }
 };
 
+export const analyzeWardrobeItem = async (file: File): Promise<Partial<WardrobeItem>> => {
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) throw new Error("No API Key");
+    
+    const ai = new GoogleGenAI({ apiKey });
+    const imagePart = await fileToPart(file);
+
+    const prompt = `
+    TASK:
+    1. Detect the main clothing item in the image.
+    2. Categorize it (Top, Bottom, FullBody, Footwear, Accessory).
+    3. Extract specific attributes (Color, Fabric, Fit, Neckline, Pattern).
+    4. Write a "Dense Visual Description". This is CRITICAL. It must describe the texture, weight, how light hits it, and the cut, so that an image generation model can recreate it perfectly later.
+
+    OUTPUT FORMAT (Strict JSON):
+    {
+      "item_detected": true, 
+      "category": "Top" | "Bottom" | "FullBody" | "Footwear" | "Accessory",
+      "sub_category": "string",
+      "main_color": "string",
+      "attributes": {
+        "fabric_texture": "string",
+        "pattern": "string",
+        "fit_type": "string",
+        "neckline": "string",
+        "sleeve_length": "string"
+      },
+      "search_tags": ["string", "string"], 
+      "dense_generation_prompt": "string" 
+    }
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: { parts: [imagePart, { text: prompt }] },
+            config: {
+                responseMimeType: "application/json"
+            }
+        });
+
+        const text = response.text?.trim() || "{}";
+        const json = JSON.parse(text);
+        
+        if (json.item_detected === false) {
+             return { name: "Unknown Item" };
+        }
+
+        return {
+            name: json.sub_category || "New Item",
+            category: json.category ? json.category.toLowerCase() : 'top',
+            subCategory: json.sub_category,
+            mainColor: json.main_color,
+            densePrompt: json.dense_generation_prompt,
+            searchTags: json.search_tags
+        };
+    } catch (err) {
+        console.error("Failed to analyze wardrobe item:", err);
+        // Fallback to basic info
+        return { name: file.name };
+    }
+};
+
 export const generateCompleteLook = async (modelImageUrl: string, garmentImages: File[]): Promise<string> => {
     const modelImagePart = dataUrlToPart(modelImageUrl);
     
@@ -305,21 +368,42 @@ export const generateCompleteLook = async (modelImageUrl: string, garmentImages:
     );
 };
 
-export const generatePoseVariation = async (tryOnImageUrl: string, poseInstruction: string): Promise<string> => {
-    const tryOnImagePart = dataUrlToPart(tryOnImageUrl);
+// Merged functionality for Pose and Vibe variations
+export const generateLookVariation = async (
+    referenceImageUrl: string, 
+    config: { pose?: string, vibe?: string }
+): Promise<string> => {
+    const referenceImagePart = dataUrlToPart(referenceImageUrl);
     
+    const poseInstruction = config.pose || "Maintain the current pose exactly.";
+    const vibeInstruction = config.vibe || "isolated on a pure white background, soft even studio lighting.";
+
+    // Logic to inject specific material physics instructions based on the Vibe keyword
+    let materialLogic = "";
+    if (config.vibe?.toLowerCase().includes("tokyo")) {
+        materialLogic = "MATERIAL PHYSICS: If the outfit contains Leather, Plastic, or Satin, render distinct neon reflections (pink/blue) on the surface. If Cotton or Wool, simulate soft ambient light absorption. Wet ground reflections must match the shoe color.";
+    } else if (config.vibe?.toLowerCase().includes("golden")) {
+        materialLogic = "MATERIAL PHYSICS: Add strong warm backlighting (rim light) to hair and shoulders. Translucent fabrics should glow slightly. Shadows should be long and soft.";
+    } else if (config.vibe?.toLowerCase().includes("flash")) {
+        materialLogic = "MATERIAL PHYSICS: High reflectivity on sequins/jewelry due to direct flash. High contrast shadows.";
+    }
+
     const contentsParts = [
-        { text: "REFERENCE LOOK (Person & Outfit):" },
-        tryOnImagePart,
+        { text: "You are a Senior Art Director for Fashion AI." },
+        { text: "REFERENCE IMAGE (Person & Outfit):" },
+        referenceImagePart,
         { text: `
-        TASK: Regenerate this exact person and outfit in a new pose.
+        TASK: Regenerate this person in a specific environment and pose.
         
-        TARGET POSE: ${poseInstruction}
+        INPUTS:
+        - Target Pose: ${poseInstruction}
+        - Target Vibe: ${vibeInstruction}
         
-        RULES:
-        1. Keep the face, hair, body type, and outfit details IDENTICAL to the Reference Look.
-        2. Change ONLY the pose to match the target description.
-        3. Background: Pure White (#FFFFFF).
+        CRITICAL INSTRUCTIONS:
+        1. IDENTITY & OUTFIT: Preserve the face, hair, body type, and outfit details IDENTICAL to the Reference Image.
+        2. PHYSICS & LIGHTING: Ensure the lighting of the environment interacts realistically with the fabric. ${materialLogic}
+        3. POSE: ${config.pose ? "Change the pose as requested." : "Keep the pose natural and consistent with the new environment."}
+        4. COMPOSITION: The subject must look anchored in the scene, not pasted.
         
         Return ONLY the image.
         ` }
@@ -328,8 +412,13 @@ export const generatePoseVariation = async (tryOnImageUrl: string, poseInstructi
     return generateWithFallback(
         { parts: contentsParts },
         { imageConfig: { aspectRatio: '3:4' } },
-        "generatePoseVariation"
+        "generateLookVariation"
     );
+};
+
+// Legacy wrapper for compatibility if needed, though we update usage in App.tsx
+export const generatePoseVariation = async (url: string, pose: string) => {
+    return generateLookVariation(url, { pose });
 };
 
 export const createStylistChat = (): Chat => {

@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -24,9 +25,6 @@ const seedDatabase = async () => {
 };
 
 const getProducts = async (): Promise<Product[]> => {
-    // Optional: Seed database on first load if it's empty
-    // await seedDatabase();
-  
     const { data, error } = await supabase
         .from('products')
         .select('*')
@@ -37,15 +35,12 @@ const getProducts = async (): Promise<Product[]> => {
         throw error;
     }
 
-    // Normalize data to ensure 'urls' is always a clean array
-    // This fixes the "nesting brackets" issue ["[\"url\"]"] and handles schema mismatches
     const normalizedData = (data || []).map((item: any) => {
         let finalUrls: string[] = [];
 
         if (Array.isArray(item.urls)) {
             finalUrls = item.urls;
         } else if (typeof item.urls === 'string') {
-            // Try to parse if it's a stringified array (which happens if DB col is Text but we send JSON)
             try {
                 const trimmed = item.urls.trim();
                 if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
@@ -56,24 +51,20 @@ const getProducts = async (): Promise<Product[]> => {
                         finalUrls = [trimmed];
                     }
                 } else {
-                    // It's just a regular URL string
                     finalUrls = trimmed ? [trimmed] : [];
                 }
             } catch (e) {
-                // If parsing fails, treat as single URL
                 finalUrls = item.urls.trim() ? [item.urls.trim()] : [];
             }
         } else if (item.url) {
              finalUrls = [item.url];
         }
         
-        // Filter out any empty strings or non-string values that might have crept in
         finalUrls = finalUrls.filter(u => typeof u === 'string' && u.trim() !== '');
 
         return {
             ...item,
             urls: finalUrls,
-            // Ensure the main 'url' is valid for the card view
             url: finalUrls.length > 0 ? finalUrls[0] : item.url
         };
     });
@@ -82,7 +73,6 @@ const getProducts = async (): Promise<Product[]> => {
 };
 
 const addProduct = async (product: Product): Promise<Product> => {
-    // Sanitize payload to ensure urls is an array
     const payload = {
         ...product,
         urls: Array.isArray(product.urls) ? product.urls : (product.url ? [product.url] : [])
@@ -102,7 +92,6 @@ const addProduct = async (product: Product): Promise<Product> => {
 };
 
 const updateProduct = async (updatedProduct: Product): Promise<Product> => {
-    // Sanitize payload to ensure urls is an array
     const payload = {
         ...updatedProduct,
         urls: Array.isArray(updatedProduct.urls) ? updatedProduct.urls : (updatedProduct.url ? [updatedProduct.url] : [])
@@ -123,14 +112,26 @@ const updateProduct = async (updatedProduct: Product): Promise<Product> => {
 };
 
 const deleteProduct = async (productId: string): Promise<void> => {
+    console.log("Attempting to delete product:", productId);
+
+    // 1. Try to cleanup wardrobe items (Best effort). 
+    // If this fails due to RLS (permissions), we ignore it and proceed to delete the product.
+    // We rely on the FK constraint being dropped in the DB so step 2 succeeds regardless.
+    try {
+        await supabase.from('user_wardrobe').delete().eq('item_id', productId);
+    } catch (e) {
+        console.warn("Wardrobe cleanup skipped/failed (likely RLS), proceeding to product delete.", e);
+    }
+
+    // 2. Delete the product
     const { error } = await supabase
         .from('products')
         .delete()
         .eq('id', productId);
         
     if (error) {
-        console.error("Error deleting product:", error);
-        throw error;
+        console.error("Error deleting product from DB:", error);
+        throw new Error(`${error.message} (Code: ${error.code})`);
     }
 };
 

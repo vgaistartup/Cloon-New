@@ -5,6 +5,7 @@
 */
 import React from 'react';
 import { XIcon, ArrowRightIcon } from './icons';
+import { supabase } from '../lib/supabaseClient';
 
 interface SettingsProps {
   onClose: () => void;
@@ -18,6 +19,12 @@ const Settings: React.FC<SettingsProps> = ({ onClose, onOpenDashboard }) => {
     { label: 'Privacy Policy', href: '#' },
     { label: 'Terms & Conditions', href: '#' },
   ];
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    onClose();
+    // App.tsx listener will handle redirect to auth screen
+  };
 
   return (
     <div className="h-full w-full bg-white flex flex-col">
@@ -48,7 +55,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose, onOpenDashboard }) => {
         </div>
 
         <div className="mt-auto pt-8">
-            <button className="text-lg font-medium text-red-500 py-4 w-full text-left hover:text-red-600 transition-colors">
+            <button 
+                onClick={handleLogout}
+                className="text-lg font-medium text-red-500 py-4 w-full text-left hover:text-red-600 transition-colors"
+            >
                 Log Out
             </button>
         </div>

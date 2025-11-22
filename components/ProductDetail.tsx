@@ -36,25 +36,42 @@ const ProductDetail: React.FC<ProductDetailProps> = ({ products, product, onClos
     };
 
     const handleShare = async () => {
-        if (product && navigator.share) {
+        if (!product) return;
+        
+        const shareUrl = window.location.href;
+        const isValidUrl = shareUrl.startsWith('http');
+
+        if (isValidUrl && navigator.share) {
             try {
                 await navigator.share({
                     title: `${product.brand} - ${product.name}`,
                     text: `Check out this ${product.name} from ${product.brand} on Cloon!`,
-                    url: window.location.href, 
+                    url: shareUrl, 
                 });
             } catch (error) {
                 console.error('Error sharing:', error);
+                // Fallback to clipboard if share fails/cancelled
+                copyToClipboard(shareUrl);
             }
         } else {
-            alert('Sharing is not supported on this browser.');
+            // Fallback if sharing not supported or invalid URL scheme
+            copyToClipboard(shareUrl);
+        }
+    };
+
+    const copyToClipboard = async (text: string) => {
+        try {
+            await navigator.clipboard.writeText(text);
+            alert('Link copied to clipboard!');
+        } catch (err) {
+            console.error('Failed to copy:', err);
+            alert('Could not copy link.');
         }
     };
     
-    if (!product) return null;
-
-    const similarItems = products.filter(p => p.id !== product.id).slice(0, 4);
-    const images = product.urls && product.urls.length > 0 ? product.urls : [product.url];
+    // Safely derive data. If product is null, these will be empty, preventing crashes before AnimatePresence handles the exit.
+    const similarItems = product ? products.filter(p => p.id !== product.id).slice(0, 4) : [];
+    const images = product ? (product.urls && product.urls.length > 0 ? product.urls : [product.url]) : [];
 
     return (
         <AnimatePresence>

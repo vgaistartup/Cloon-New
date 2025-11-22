@@ -10,6 +10,12 @@ export interface WardrobeItem {
   id: string;
   name: string;
   url: string;
+  // AI Analysis Fields
+  category?: string;
+  subCategory?: string;
+  mainColor?: string;
+  densePrompt?: string; // The "Dense Visual Description"
+  searchTags?: string[];
 }
 
 export interface OutfitLayer {
@@ -38,7 +44,8 @@ export interface GenerationTask {
     id: string;
     type: GenerationTaskType;
     items?: (Product | WardrobeItem)[]; // For try-on and remix
-    lookId?: string; // For pose
+    lookId?: string; // For pose/vibe
     poseInstruction?: string; // For pose
+    vibeInstruction?: string; // For vibe
     timestamp: number;
 }

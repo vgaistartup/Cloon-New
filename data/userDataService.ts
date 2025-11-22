@@ -5,277 +5,277 @@
 */
 import { supabase } from '../lib/supabaseClient';
 import { Look, Model, WardrobeItem } from '../types';
-import { getUserId } from '../lib/user';
+
+// Helper to get authenticated user ID safely
+const getAuthUserId = async (): Promise<string> => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user) {
+        throw new Error("User not authenticated");
+    }
+    return session.user.id;
+};
 
 export const userDataService = {
   async saveModel(url: string): Promise<Model | null> {
-    const userId = getUserId();
-    console.log(`Saving model for user: ${userId}. Image length: ${url.length}`);
-    
-    // Basic validation to ensure we aren't saving empty or truncated data
-    if (!url || url.length < 1000) {
-        console.error("Attempted to save invalid model URL");
-        return null;
-    }
+    try {
+        const userId = await getAuthUserId();
+        console.log(`Saving model for user: ${userId}`);
+        
+        if (!url || url.length < 1000) {
+            console.error("Attempted to save invalid model URL");
+            return null;
+        }
 
-    const { data, error } = await supabase
-      .from('user_models')
-      .insert([{ user_id: userId, url }])
-      .select()
-      .single();
-    
-    if (error) {
-        console.error("Error saving model:", JSON.stringify(error, null, 2));
-        return null;
-    }
-    return {
-        id: data.id,
-        url: data.url,
-        userId: data.user_id,
-        createdAt: new Date(data.created_at).getTime()
-    };
-  },
+        const { data, error } = await supabase
+        .from('user_models')
+        .insert([{ user_id: userId, url }])
+        .select()
+        .single();
+        
+        if (error) throw error;
 
-  async getLatestModel(): Promise<Model | null> {
-     const userId = getUserId();
-     console.log(`Fetching latest model for user: ${userId}`);
-
-     // 1. Try to fetch specifically for this user
-     const { data, error } = await supabase
-      .from('user_models')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
-
-     if (data) {
-         return {
+        return {
             id: data.id,
             url: data.url,
             userId: data.user_id,
             createdAt: new Date(data.created_at).getTime()
-         };
-     }
+        };
+    } catch (error) {
+        console.error("Error saving model:", error);
+        return null;
+    }
+  },
 
-     // 2. FALLBACK: If no model found for this specific user ID (common in dev environments 
-     // where localStorage is wiped on refresh), fetch the absolute latest model from the DB.
-     // This ensures the user sees *something* they likely just created.
-     console.log("No model found for current User ID. Attempting global fallback...");
-     
-     const { data: fallbackData, error: fallbackError } = await supabase
-      .from('user_models')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single();
+  async getLatestModel(): Promise<Model | null> {
+     try {
+        const userId = await getAuthUserId();
+        console.log(`Fetching latest model for user: ${userId}`);
 
-     if (fallbackData) {
-         console.log("Found fallback model.");
-         return {
-            id: fallbackData.id,
-            url: fallbackData.url,
-            userId: fallbackData.user_id,
-            createdAt: new Date(fallbackData.created_at).getTime()
-         };
-     }
+        const { data, error } = await supabase
+        .from('user_models')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
 
-     if (error && error.code !== 'PGRST116') {
-         console.error("Error fetching model:", JSON.stringify(error, null, 2));
+        if (data) {
+            return {
+                id: data.id,
+                url: data.url,
+                userId: data.user_id,
+                createdAt: new Date(data.created_at).getTime()
+            };
+        }
+        return null;
+     } catch (error) {
+         console.error("Error fetching latest model:", error);
+         return null;
      }
-     
-     return null;
   },
 
   async saveLook(look: Omit<Look, 'id' | 'timestamp'>): Promise<Look | null> {
-      const userId = getUserId();
-      const { data, error } = await supabase
-        .from('user_looks')
-        .insert([{ 
-            user_id: userId, 
-            url: look.url, 
-            garments: look.garments 
-        }])
-        .select()
-        .single();
+      try {
+        const userId = await getAuthUserId();
+        const { data, error } = await supabase
+            .from('user_looks')
+            .insert([{ 
+                user_id: userId, 
+                url: look.url, 
+                garments: look.garments 
+            }])
+            .select()
+            .single();
 
-      if (error) {
-          console.error("Error saving look:", JSON.stringify(error, null, 2));
+        if (error) throw error;
+
+        return {
+            id: data.id,
+            url: data.url,
+            garments: data.garments,
+            timestamp: new Date(data.created_at).getTime(),
+            userId: data.user_id
+        };
+      } catch (error) {
+          console.error("Error saving look:", error);
           return null;
       }
-
-      return {
-          id: data.id,
-          url: data.url,
-          garments: data.garments,
-          timestamp: new Date(data.created_at).getTime(),
-          userId: data.user_id
-      };
   },
 
   async getLooks(): Promise<Look[]> {
-      const userId = getUserId();
-      
-      // 1. Try fetching by User ID
-      let { data, error } = await supabase
-        .from('user_looks')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false });
-
-      // 2. FALLBACK: If empty, fetch global latest looks (limit 20 for performance)
-      if (!data || data.length === 0) {
-           console.log("No looks for user. Fetching global fallback...");
-           const fallback = await supabase
+      try {
+        const userId = await getAuthUserId();
+        
+        const { data, error } = await supabase
             .from('user_looks')
             .select('*')
-            .order('created_at', { ascending: false })
-            .limit(20);
-           
-           if (fallback.data) {
-               data = fallback.data;
-           }
-      }
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false });
 
-      if (error) {
-          console.error("Error fetching looks:", JSON.stringify(error, null, 2));
+        if (error) throw error;
+
+        return (data || []).map((row: any) => ({
+            id: row.id,
+            url: row.url,
+            garments: row.garments,
+            timestamp: new Date(row.created_at).getTime(),
+            userId: row.user_id
+        }));
+      } catch (error) {
+          console.error("Error fetching looks:", error);
           return [];
       }
-
-      return (data || []).map((row: any) => ({
-          id: row.id,
-          url: row.url,
-          garments: row.garments,
-          timestamp: new Date(row.created_at).getTime(),
-          userId: row.user_id
-      }));
   },
 
   async deleteLook(lookId: string): Promise<boolean> {
-      console.log("userDataService: Requesting delete for look ID:", lookId);
-      
-      const { error, count } = await supabase
-          .from('user_looks')
-          .delete({ count: 'exact' })
-          .eq('id', lookId);
-      
-      if (error) {
-          console.error("Error deleting look from DB:", JSON.stringify(error, null, 2));
+      try {
+        const userId = await getAuthUserId();
+        console.log(`[Delete Look] Attempting to delete look ${lookId} for user ${userId}`);
+        
+        const { error, status, statusText } = await supabase
+            .from('user_looks')
+            .delete()
+            .eq('id', lookId)
+            .eq('user_id', userId);
+        
+        console.log(`[Delete Look] Response: Status ${status} ${statusText}`, error);
+
+        if (error) {
+            console.error("[Delete Look] DB Error:", error);
+            throw error;
+        }
+        
+        console.log(`[Delete Look] Successfully deleted look request sent.`);
+        return true;
+      } catch (error) {
+          console.error("[Delete Look] Exception:", error);
           return false;
-      }
-      
-      if (count === 0) {
-          console.warn(`Delete operation completed but 0 rows were deleted. ID '${lookId}' might not exist or RLS blocked it.`);
-          return false;
-      } else {
-          console.log(`Successfully deleted ${count} row(s) for ID: ${lookId}`);
-          return true;
       }
   },
   
   async deleteModel(modelId: string): Promise<void> {
-       const { error } = await supabase
-          .from('user_models')
-          .delete()
-          .eq('id', modelId);
-          
-      if (error) {
-          console.error("Error deleting model:", JSON.stringify(error, null, 2));
-          throw error;
-      }
+       try {
+          const userId = await getAuthUserId();
+          const { error } = await supabase
+            .from('user_models')
+            .delete()
+            .eq('id', modelId)
+            .eq('user_id', userId);
+            
+            if (error) throw error;
+       } catch (error) {
+           console.error("Error deleting model:", error);
+       }
   },
 
   // --- Wardrobe Methods ---
 
   async addToWardrobe(item: WardrobeItem, category?: string): Promise<void> {
-      const userId = getUserId();
-      
-      // Prevent duplicates based on item_id for this user
-      const { data: existing } = await supabase
-          .from('user_wardrobe')
-          .select('id')
-          .eq('user_id', userId)
-          .eq('item_id', item.id)
-          .single();
+      try {
+        const userId = await getAuthUserId();
+        
+        const { data: existing } = await supabase
+            .from('user_wardrobe')
+            .select('id')
+            .eq('user_id', userId)
+            .eq('item_id', item.id)
+            .single();
 
-      if (existing) {
-          console.log("Item already exists in wardrobe, skipping.");
-          return;
-      }
+        if (existing) return;
+        
+        const payload = {
+            user_id: userId,
+            item_id: item.id,
+            name: item.name,
+            url: item.url,
+            category: category || item.category || null,
+            metadata: {
+                subCategory: item.subCategory,
+                densePrompt: item.densePrompt
+            }
+        };
 
-      const { error } = await supabase
-          .from('user_wardrobe')
-          .insert([{
-              user_id: userId,
-              item_id: item.id,
-              name: item.name,
-              url: item.url,
-              category: category || null
-          }]);
+        const { error } = await supabase
+            .from('user_wardrobe')
+            .insert([payload]);
 
-      if (error) {
-          console.error("Error adding to wardrobe:", error);
-      }
-  },
-
-  async removeFromWardrobe(itemId: string): Promise<void> {
-      const userId = getUserId();
-      const { error } = await supabase
-          .from('user_wardrobe')
-          .delete()
-          .eq('user_id', userId)
-          .eq('item_id', itemId);
-
-      if (error) {
-          console.error("Error removing from wardrobe:", error);
+        if (error) throw error;
+      } catch (error: any) {
+          console.error("Error adding to wardrobe:", error.message || error);
+          if (error?.code) {
+               alert(`Error saving to wardrobe: ${error.message} (Code: ${error.code})`);
+          }
       }
   },
 
-  async removeMultipleFromWardrobe(itemIds: string[]): Promise<void> {
-    const userId = getUserId();
-    const { error } = await supabase
-        .from('user_wardrobe')
-        .delete()
-        .eq('user_id', userId)
-        .in('item_id', itemIds);
+  async removeFromWardrobe(itemId: string): Promise<boolean> {
+      try {
+        const userId = await getAuthUserId();
+        console.log(`[Delete Wardrobe] Attempting to delete item ${itemId} for user ${userId}`);
 
-    if (error) {
-        console.error("Error batch removing from wardrobe:", error);
+        const { error, status, statusText } = await supabase
+            .from('user_wardrobe')
+            .delete()
+            .eq('user_id', userId)
+            .eq('item_id', itemId);
+
+        console.log(`[Delete Wardrobe] Response: Status ${status} ${statusText}`, error);
+
+        if (error) throw error;
+        
+        console.log("[Delete Wardrobe] Success.");
+        return true;
+      } catch (error) {
+          console.error("[Delete Wardrobe] Error:", error);
+          return false;
+      }
+  },
+
+  async removeMultipleFromWardrobe(itemIds: string[]): Promise<boolean> {
+    try {
+        const userId = await getAuthUserId();
+        console.log(`[Delete Wardrobe Batch] Items:`, itemIds, `User: ${userId}`);
+
+        const { error, status, statusText } = await supabase
+            .from('user_wardrobe')
+            .delete()
+            .eq('user_id', userId)
+            .in('item_id', itemIds);
+
+        console.log(`[Delete Wardrobe Batch] Response: Status ${status} ${statusText}`, error);
+
+        if (error) throw error;
+        console.log(`[Delete Wardrobe Batch] Success.`);
+        return true;
+    } catch (error) {
+        console.error("[Delete Wardrobe Batch] Error:", error);
+        return false;
     }
   },
 
   async getWardrobe(): Promise<WardrobeItem[]> {
-      const userId = getUserId();
-      
-      // Fetch user specific wardrobe
-      let { data, error } = await supabase
-          .from('user_wardrobe')
-          .select('*')
-          .eq('user_id', userId)
-          .order('created_at', { ascending: false });
-
-      if (!data || data.length === 0) {
-           console.log("Wardrobe empty for user, attempting global fallback for demo experience.");
-           const fallback = await supabase
+      try {
+        const userId = await getAuthUserId();
+        
+        const { data, error } = await supabase
             .from('user_wardrobe')
             .select('*')
-            .order('created_at', { ascending: false })
-            .limit(10);
-           
-           if (fallback.data && fallback.data.length > 0) {
-               data = fallback.data;
-           }
-      }
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false });
 
-      if (error) {
+        if (error) throw error;
+
+        return (data || []).map((row: any) => ({
+            id: row.item_id, 
+            name: row.name,
+            url: row.url,
+            category: row.category,
+            subCategory: row.metadata?.subCategory,
+            densePrompt: row.metadata?.densePrompt
+        }));
+      } catch (error) {
           console.error("Error fetching wardrobe:", error);
           return [];
       }
-
-      return (data || []).map((row: any) => ({
-          id: row.item_id, // Map database item_id back to application id
-          name: row.name,
-          url: row.url
-      }));
   }
 };

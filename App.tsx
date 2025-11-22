@@ -6,11 +6,13 @@
 
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { supabase } from './lib/supabaseClient'; // Auth Client
+import Auth from './components/Auth'; // Auth Screen
 import StartScreen from './components/StartScreen';
 import Canvas from './components/Canvas';
 import WardrobePanel from './components/WardrobeModal';
 import OutfitStack from './components/OutfitStack';
-import { generateVirtualTryOnImage, generatePoseVariation, analyzeOutfitStyle, generateCompleteLook } from './services/geminiService';
+import { generateVirtualTryOnImage, generateLookVariation, analyzeOutfitStyle, generateCompleteLook, analyzeWardrobeItem } from './services/geminiService';
 import { OutfitLayer, WardrobeItem, Look, GenerationTask } from './types';
 import { XIcon, LockIcon } from './components/icons';
 import { defaultWardrobe } from './wardrobe';
@@ -30,8 +32,8 @@ import SplashScreen from './components/SplashScreen';
 import AdminDashboard from './components/AdminDashboard';
 import Settings from './components/Settings';
 import { userDataService } from './data/userDataService';
-import { getUserId } from './lib/user';
 import RemixStudio from './components/RemixStudio';
+import LoadingOverlay from './components/LoadingOverlay';
 
 const useMediaQuery = (query: string): boolean => {
   const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
@@ -48,6 +50,10 @@ const useMediaQuery = (query: string): boolean => {
 };
 
 const App: React.FC = () => {
+  // Auth State
+  const [session, setSession] = useState<any>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
   const [isAdmin, setIsAdmin] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
@@ -81,20 +87,35 @@ const App: React.FC = () => {
   // API Key Selection State
   const [hasApiKey, setHasApiKey] = useState(false);
 
-  // Check for API Key Selection on Mount
+  // 1. Check Supabase Session on Mount
   useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setAuthChecked(true);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // 2. Check for API Key Selection (Only if logged in)
+  useEffect(() => {
+      if (!session) return;
       const checkApiKey = async () => {
           if ((window as any).aistudio && (window as any).aistudio.hasSelectedApiKey) {
               const hasKey = await (window as any).aistudio.hasSelectedApiKey();
               setHasApiKey(hasKey);
           } else {
-              // Fallback for environments without the wrapper (e.g., local dev)
-              // Assume env var is present or handled elsewhere.
               setHasApiKey(true);
           }
       };
       checkApiKey();
-  }, []);
+  }, [session]);
 
   const handleConnectApiKey = async () => {
       if ((window as any).aistudio && (window as any).aistudio.openSelectKey) {
@@ -103,14 +124,12 @@ const App: React.FC = () => {
       }
   };
 
-  // Ref to track active saved looks for race-condition prevention
   const savedLooksRef = useRef<Look[]>([]);
   useEffect(() => {
       savedLooksRef.current = savedLooks;
   }, [savedLooks]);
 
-  // Derived state for the UI to show total pending items
-  const totalPendingCount = generationQueue.length + (isProcessingQueue ? 1 : 0);
+  const totalPendingCount = generationQueue.length;
 
   const loadProducts = useCallback(async () => {
       try {
@@ -122,11 +141,9 @@ const App: React.FC = () => {
   }, []);
 
   const loadUserData = useCallback(async () => {
-      const userId = getUserId();
-      console.log("Loading data for UserID:", userId);
+      if (!session) return;
       
       try {
-          // Fetch model, looks, and wardrobe in parallel
           const [model, dbLooks, dbWardrobe] = await Promise.all([
               userDataService.getLatestModel(),
               userDataService.getLooks(),
@@ -136,7 +153,6 @@ const App: React.FC = () => {
           let initialLooks: Look[] = [];
 
           if (model) {
-              console.log("Found saved model:", model.id);
               setModelImageUrl(model.url);
               setModelId(model.id);
               
@@ -148,11 +164,8 @@ const App: React.FC = () => {
                   userId: model.userId
               };
               initialLooks.push(baseLook);
-          } else {
-              console.log("No saved model found.");
           }
 
-          // Merge base model with saved looks and sort strictly by timestamp descending
           const combinedLooks = [...initialLooks, ...dbLooks].sort((a, b) => b.timestamp - a.timestamp);
           
           setSavedLooks(combinedLooks);
@@ -161,11 +174,10 @@ const App: React.FC = () => {
       } catch (err) {
           console.error("Failed to load user data:", err);
       }
-  }, []);
+  }, [session]);
 
-  // Initial Load
   useEffect(() => {
-    if (hasApiKey) {
+    if (session && hasApiKey) {
         loadProducts();
         loadUserData();
     
@@ -175,16 +187,14 @@ const App: React.FC = () => {
     
         return () => clearTimeout(timer);
     }
-  }, [loadProducts, loadUserData, hasApiKey]);
+  }, [loadProducts, loadUserData, hasApiKey, session]);
 
-  // Refresh User Data when switching to Looks or Wardrobe tab
   useEffect(() => {
-    if (hasApiKey && (activeTab === 'looks' || activeTab === 'wardrobe')) {
+    if (session && hasApiKey && (activeTab === 'looks' || activeTab === 'wardrobe')) {
       loadUserData();
     }
-  }, [activeTab, loadUserData, hasApiKey]);
+  }, [activeTab, loadUserData, hasApiKey, session]);
 
-  // Filter products based on search query
   const filteredProducts = useMemo(() => {
     if (!searchQuery.trim()) return products;
     const query = searchQuery.toLowerCase();
@@ -203,9 +213,8 @@ const App: React.FC = () => {
         url: url,
         garments: [],
         timestamp: Date.now(),
-        userId: getUserId()
+        userId: session?.user?.id
     };
-    // Add to front as it is newest
     setSavedLooks(prev => [baseLook, ...prev]);
     
     try {
@@ -237,10 +246,9 @@ const App: React.FC = () => {
         setWardrobe(defaultWardrobe); 
         setWishlist([]);
         setSavedLooks([]); 
-        setGenerationQueue([]); // Clear queue on reset
+        setGenerationQueue([]);
   };
 
-  // Robust file loader that uses Canvas to bypass CORS opacity issues
   const fetchFileFromUrl = async (url: string, name: string): Promise<File> => {
       return new Promise((resolve, reject) => {
           const image = new Image();
@@ -268,13 +276,11 @@ const App: React.FC = () => {
 
           image.onerror = (e) => {
              console.warn("Canvas load failed, falling back to fetch", e);
-             // Fallback to original fetch if canvas fails (e.g. very strict CORS)
              fetch(url)
                 .then(res => res.blob())
                 .then(blob => resolve(new File([blob], name, { type: blob.type })))
                 .catch(err => {
                      console.warn("Fetch failed, using placeholder");
-                     // Create a 1x1 transparent PNG as a safe fallback to prevent crash
                      const base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
                      const byteCharacters = atob(base64);
                      const byteNumbers = new Array(byteCharacters.length);
@@ -289,8 +295,6 @@ const App: React.FC = () => {
       });
   };
 
-  // --- Queue Processing Logic ---
-
   useEffect(() => {
     const processNext = async () => {
         if (isProcessingQueue || generationQueue.length === 0) return;
@@ -302,18 +306,16 @@ const App: React.FC = () => {
             await executeTask(currentTask);
         } catch (err) {
             console.error("Task failed:", err);
-            // Optionally set error state here, but we usually want to continue the queue
         } finally {
-            // Remove the finished task from queue
             setGenerationQueue(prev => prev.slice(1));
             setIsProcessingQueue(false);
         }
     };
 
-    if (hasApiKey) {
+    if (session && hasApiKey) {
         processNext();
     }
-  }, [generationQueue, isProcessingQueue, modelImageUrl, hasApiKey]);
+  }, [generationQueue, isProcessingQueue, modelImageUrl, hasApiKey, session]);
 
   const executeTask = async (task: GenerationTask) => {
       if (!modelImageUrl) {
@@ -321,7 +323,6 @@ const App: React.FC = () => {
           return;
       }
 
-      // Start fake progress for visual feedback of the active item
       setGenerationProgress(5);
       const progressInterval = setInterval(() => {
         setGenerationProgress(prev => {
@@ -332,7 +333,6 @@ const App: React.FC = () => {
 
       try {
           let newImageUrl = '';
-          let finalLookId = '';
 
           if (task.type === 'try-on' || task.type === 'remix') {
                const items = task.items || [];
@@ -342,10 +342,8 @@ const App: React.FC = () => {
                }));
                
                if (task.type === 'try-on') {
-                   // Single item try-on
                    newImageUrl = await generateVirtualTryOnImage(modelImageUrl, files[0]);
                } else {
-                   // Multi-item remix
                    newImageUrl = await generateCompleteLook(modelImageUrl, files);
                }
 
@@ -353,15 +351,13 @@ const App: React.FC = () => {
                 const newLook: Look = {
                         id: tempLookId,
                         url: newImageUrl,
-                        garments: items.map(i => ({ id: i.id, name: i.name, url: i.url })),
+                        garments: items.map(i => ({ ...i })),
                         timestamp: Date.now(),
-                        userId: getUserId()
+                        userId: session?.user?.id
                 };
 
-                // Optimistic update
                 setSavedLooks(prev => [newLook, ...prev]);
 
-                // Persist to DB
                 const savedLookData = await userDataService.saveLook({
                     url: newImageUrl,
                     garments: items.map(i => ({ id: i.id, name: i.name, url: i.url }))
@@ -376,18 +372,18 @@ const App: React.FC = () => {
                         }
                         return prev.map(look => look.id === tempLookId ? { ...look, id: savedLookData.id } : look);
                     });
-                    finalLookId = savedLookData.id;
-                } else {
-                    finalLookId = tempLookId;
                 }
 
           } else if (task.type === 'pose') {
                const targetLook = savedLooksRef.current.find(l => l.id === task.lookId);
-               if (!targetLook || !task.poseInstruction) {
-                   throw new Error("Invalid pose task data");
+               if (!targetLook || (!task.poseInstruction && !task.vibeInstruction)) {
+                   throw new Error("Invalid pose/vibe task data");
                }
 
-               newImageUrl = await generatePoseVariation(targetLook.url, task.poseInstruction);
+               newImageUrl = await generateLookVariation(targetLook.url, {
+                   pose: task.poseInstruction,
+                   vibe: task.vibeInstruction
+               });
                const tempLookId = `look-${Date.now()}`;
 
                const newLook: Look = {
@@ -395,7 +391,7 @@ const App: React.FC = () => {
                     url: newImageUrl,
                     garments: targetLook.garments,
                     timestamp: Date.now(),
-                    userId: getUserId()
+                    userId: session?.user?.id
                };
 
                setSavedLooks(prev => [newLook, ...prev]);
@@ -414,36 +410,24 @@ const App: React.FC = () => {
                         }
                         return prev.map(look => look.id === tempLookId ? { ...look, id: savedLookData.id } : look);
                     });
-                    finalLookId = savedLookData.id;
-                } else {
-                    finalLookId = tempLookId;
                 }
           }
 
           setGenerationProgress(100);
-          
-          // Switch tab only if this was the last item in queue or user isn't doing something else
-          if (generationQueue.length === 1) { // 1 because we haven't shifted yet
-               // Optional: Auto-switch logic could be refined
-          }
 
       } catch (err: any) {
           console.error("Queue Task Execution Error:", err);
           setError(getFriendlyErrorMessage(err, "Generation failed."));
       } finally {
           clearInterval(progressInterval);
-          // Small delay before clearing progress to allow animation to complete
           setTimeout(() => {
               setGenerationProgress(0);
           }, 500);
       }
   };
 
-
-  // --- Event Handlers (Queue Pushers) ---
-
   const handleTryOn = (item: Product | WardrobeItem) => {
-      setSelectedProduct(null); // Close detail view
+      setSelectedProduct(null); 
       
       const newTask: GenerationTask = {
           id: `task-${Date.now()}`,
@@ -456,7 +440,6 @@ const App: React.FC = () => {
   };
 
   const handleRemixLook = (items: (Product | WardrobeItem)[]) => {
-      // Validate base model exists
       if (!modelImageUrl) {
           alert("Please create a model first before remixing.");
           setActiveTab('looks');
@@ -472,16 +455,17 @@ const App: React.FC = () => {
       };
 
       setGenerationQueue(prev => [...prev, newTask]);
-      setShowRemixStudio(false); // Close studio immediately so user can see queue progress
-      setActiveTab('looks'); // Move to looks tab to see progress
+      setShowRemixStudio(false);
+      setActiveTab('looks');
   };
 
-  const handlePoseSelect = (lookId: string, poseInstruction: string) => {
+  const handleVariationSelect = (lookId: string, config: { pose?: string, vibe?: string }) => {
       const newTask: GenerationTask = {
           id: `task-${Date.now()}`,
           type: 'pose',
           lookId,
-          poseInstruction,
+          poseInstruction: config.pose,
+          vibeInstruction: config.vibe,
           timestamp: Date.now()
       };
       setGenerationQueue(prev => [...prev, newTask]);
@@ -494,7 +478,6 @@ const App: React.FC = () => {
   const handleToggleWardrobe = async (product: Product) => {
     const exists = wardrobe.some(item => item.id === product.id);
     
-    // Optimistic Update
     setWardrobe(prev => exists ? prev.filter(item => item.id !== product.id) : [...prev, product]);
 
     try {
@@ -509,31 +492,72 @@ const App: React.FC = () => {
   };
 
   const handleDeleteWardrobeItems = async (itemIds: string[]) => {
-      // Optimistic Update
+      const previousWardrobe = [...wardrobe];
+      
       setWardrobe(prev => prev.filter(item => !itemIds.includes(item.id)));
       
       try {
-          await userDataService.removeMultipleFromWardrobe(itemIds);
+          const success = await userDataService.removeMultipleFromWardrobe(itemIds);
+          if (!success) {
+               throw new Error("Failed to delete from database");
+          }
       } catch (err) {
           console.error("Failed to delete items from wardrobe:", err);
-          // Revert on failure (optional, but good practice. For now we assume success for speed)
+          setWardrobe(previousWardrobe);
+          alert("Could not delete items. Please check your connection or permissions.");
       }
   };
   
-  const handleCustomUpload = async (file: File) => {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-          const base64Url = e.target?.result as string;
+  const handleCustomUpload = async (file: File): Promise<WardrobeItem | undefined> => {
+      setIsLoading(true);
+      setLoadingMessage("Analyzing wardrobe item...");
+      
+      try {
+          const analysis = await analyzeWardrobeItem(file);
+          
+          const base64Url = await new Promise<string>((resolve) => {
+               const reader = new FileReader();
+               reader.onload = (e) => resolve(e.target?.result as string);
+               reader.readAsDataURL(file);
+          });
+              
+          const newItem: WardrobeItem = {
+              id: `custom-${Date.now()}`,
+              name: analysis.name || file.name,
+              url: base64Url,
+              category: analysis.category,
+              subCategory: analysis.subCategory,
+              mainColor: analysis.mainColor,
+              densePrompt: analysis.densePrompt,
+              searchTags: analysis.searchTags
+          };
+          
+          setWardrobe(prev => [newItem, ...prev]);
+          await userDataService.addToWardrobe(newItem, newItem.category);
+          
+          setIsLoading(false);
+          setLoadingMessage('');
+          return newItem;
+
+      } catch (e) {
+          console.error("Analysis failed, falling back to simple upload", e);
+          const base64Url = await new Promise<string>((resolve) => {
+               const reader = new FileReader();
+               reader.onload = (e) => resolve(e.target?.result as string);
+               reader.readAsDataURL(file);
+          });
+
           const newItem: WardrobeItem = {
               id: `custom-${Date.now()}`,
               name: file.name,
               url: base64Url
           };
-          
           setWardrobe(prev => [newItem, ...prev]);
           await userDataService.addToWardrobe(newItem, 'custom');
-      };
-      reader.readAsDataURL(file);
+          setIsLoading(false);
+          setLoadingMessage('');
+          return newItem;
+      }
   };
 
   const handleProductSelect = (item: Product | WardrobeItem) => {
@@ -546,23 +570,20 @@ const App: React.FC = () => {
   const handleDeleteLook = async (lookId: string) => {
         console.log("App: Deleting Look ID:", lookId);
         
-        // 1. Optimistic update: Remove from UI immediately
+        const previousLooks = [...savedLooks];
         setSavedLooks(prev => prev.filter(l => l.id !== lookId));
         
         try {
-            // 2. Check if it's a persistent DB ID
-            // If it starts with 'look-', it hasn't been saved to DB yet (or failed to save).
             if (!lookId.startsWith('model-base-') && !lookId.startsWith('temp-base-') && !lookId.startsWith('look-')) {
                 const success = await userDataService.deleteLook(lookId);
                 if (!success) {
-                    console.warn(`App: deleteLook returned false for ID: ${lookId}`);
+                    throw new Error("Database delete failed");
                 }
-            } else {
-                console.warn("App: Skipping DB delete for temporary/base ID:", lookId);
-            }
+            } 
         } catch (err) {
             console.error("Failed to delete look from DB:", err);
-            setError("Could not delete look completely. Please refresh.");
+            setSavedLooks(previousLooks);
+            alert("Failed to delete look. Please try again.");
         }
   };
 
@@ -574,6 +595,13 @@ const App: React.FC = () => {
   const handleResetInitialLookId = useCallback(() => {
     setInitialLookId(null);
   }, []);
+
+  // Render Logic
+  if (!authChecked) return null; // Initial loading
+
+  if (!session) {
+    return <Auth />;
+  }
 
   if (!hasApiKey) {
       return (
@@ -609,8 +637,11 @@ const App: React.FC = () => {
         {showSplash && <SplashScreen />}
       </AnimatePresence>
       
+      {isLoading && loadingMessage && (
+         <LoadingOverlay message={loadingMessage} />
+      )}
+      
       <div className="font-sans h-[100dvh] w-screen bg-white overflow-hidden flex flex-col text-[#1D1D1F]">
-        {/* Header for standard pages - hide global header when on Wardrobe/Looks/Remix tabs to use custom ones */}
         {activeTab !== 'looks' && activeTab !== 'wardrobe' && !showRemixStudio && (
             <Header 
                 onOpenSettings={() => setShowSettings(true)} 
@@ -621,12 +652,10 @@ const App: React.FC = () => {
             />
         )}
         
-        {/* Main Content Area */}
         <main className={`flex-grow flex flex-col overflow-y-auto scrollbar-hide`}>
           {activeTab === 'home' && <Home products={filteredProducts} recentLooks={savedLooks} onProductSelect={handleProductSelect} onChangeTab={setActiveTab} wishlist={wishlist} onToggleWishlist={handleToggleWishlist} onLookSelect={handleLookSelect} />}
         </main>
         
-        {/* Wardrobe Overlay with Slide Animation */}
         <AnimatePresence>
           {activeTab === 'wardrobe' && (
               <motion.div
@@ -644,12 +673,12 @@ const App: React.FC = () => {
                     onClose={() => setActiveTab('home')}
                     generationProgress={generationProgress}
                     queueCount={totalPendingCount}
+                    onTryOn={handleTryOn}
                   />
               </motion.div>
           )}
         </AnimatePresence>
 
-        {/* MyLooks Overlay with Slide Animation */}
         <AnimatePresence>
           {activeTab === 'looks' && (
               <motion.div
@@ -670,7 +699,7 @@ const App: React.FC = () => {
                     initialLookId={initialLookId}
                     onResetInitialLookId={handleResetInitialLookId}
                     onRemix={() => setShowRemixStudio(true)}
-                    onPoseSelect={handlePoseSelect}
+                    onPoseSelect={handleVariationSelect}
                     generationProgress={generationProgress}
                     queueCount={totalPendingCount}
                     onClose={() => setActiveTab('home')}
@@ -679,7 +708,6 @@ const App: React.FC = () => {
           )}
         </AnimatePresence>
         
-        {/* Bottom Navigation - Hidden when Looks, Wardrobe or Remix is active */}
         {!showRemixStudio && activeTab !== 'looks' && activeTab !== 'wardrobe' && <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />}
 
         <ProductDetail 
@@ -716,7 +744,6 @@ const App: React.FC = () => {
             )}
         </AnimatePresence>
         
-        {/* Admin Dashboard Overlay */}
         <AnimatePresence>
             {isAdmin && (
                 <motion.div
@@ -750,6 +777,7 @@ const App: React.FC = () => {
                         onCreateLook={handleRemixLook}
                         generationProgress={generationProgress}
                         queueCount={totalPendingCount}
+                        onUpload={handleCustomUpload}
                     />
                 </motion.div>
             )}

@@ -5,7 +5,7 @@
 */
 import React, { useState } from 'react';
 import { WardrobeItem } from '../types';
-import { UploadCloudIcon, Trash2Icon, FilterIcon, CheckCircleIcon, XIcon } from './icons';
+import { UploadCloudIcon, Trash2Icon, FilterIcon, CheckCircleIcon, XIcon, SparklesIcon } from './icons';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface WardrobeViewProps {
@@ -16,9 +16,10 @@ interface WardrobeViewProps {
     onClose?: () => void;
     generationProgress?: number;
     queueCount?: number;
+    onTryOn?: (item: WardrobeItem) => void;
 }
 
-const WardrobeView: React.FC<WardrobeViewProps> = ({ wardrobe, onProductSelect, onUpload, onDeleteItems, onClose, generationProgress = 0, queueCount = 0 }) => {
+const WardrobeView: React.FC<WardrobeViewProps> = ({ wardrobe, onProductSelect, onUpload, onDeleteItems, onClose, generationProgress = 0, queueCount = 0, onTryOn }) => {
     const [isSelectionMode, setIsSelectionMode] = useState(false);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
@@ -46,7 +47,10 @@ const WardrobeView: React.FC<WardrobeViewProps> = ({ wardrobe, onProductSelect, 
         }
     };
     
-    const handleTrashClick = () => {
+    const handleTrashClick = (e: React.MouseEvent) => {
+        e.stopPropagation(); // Prevent bubbling
+        console.log("Trash clicked. Mode:", isSelectionMode, "Selected:", selectedIds.size);
+
         if (wardrobe.length === 0) return;
 
         if (!isSelectionMode) {
@@ -54,15 +58,20 @@ const WardrobeView: React.FC<WardrobeViewProps> = ({ wardrobe, onProductSelect, 
             setIsSelectionMode(true);
             setSelectedIds(new Set());
         } else {
-            // If already in selection mode and items are selected, confirm delete
-            if (selectedIds.size > 0 && onDeleteItems) {
-                if (window.confirm(`Delete ${selectedIds.size} item(s)?`)) {
+            // If already in selection mode
+            if (selectedIds.size > 0) {
+                if (onDeleteItems) {
+                    // Removed blocking confirm dialog
+                    console.log("Executing delete for:", Array.from(selectedIds));
                     onDeleteItems(Array.from(selectedIds));
                     setIsSelectionMode(false);
                     setSelectedIds(new Set());
+                } else {
+                    console.error("onDeleteItems prop is missing");
                 }
             } else {
                 // If nothing selected, just exit selection mode
+                console.log("Exiting selection mode (no items selected)");
                 setIsSelectionMode(false);
             }
         }
@@ -103,9 +112,10 @@ const WardrobeView: React.FC<WardrobeViewProps> = ({ wardrobe, onProductSelect, 
                     My Wardrobe
                 </h1>
                 
-                <div className="flex items-center gap-2 justify-end w-16">
+                {/* Fixed width constraint removed to prevent button covering/squashing */}
+                <div className="flex items-center gap-2 justify-end w-auto min-w-[64px]">
                         {queueCount > 0 && (
-                            <div className="flex items-center justify-center p-1">
+                            <div className="flex items-center justify-center p-1 pointer-events-none">
                                  <svg className="w-5 h-5 transform -rotate-90" viewBox="0 0 24 24">
                                     <circle className="text-surface-subtle" strokeWidth="3" stroke="currentColor" fill="transparent" r={radius} cx="12" cy="12" />
                                     <circle className="text-black transition-all duration-300 ease-in-out" strokeWidth="3" strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" stroke="currentColor" fill="transparent" r={radius} cx="12" cy="12" />
@@ -123,10 +133,10 @@ const WardrobeView: React.FC<WardrobeViewProps> = ({ wardrobe, onProductSelect, 
                             </div>
                         )}
                         <button 
-                        onClick={handleTrashClick}
-                        className={`p-2 rounded-full transition-colors ${isSelectionMode && selectedIds.size > 0 ? 'text-red-600 bg-red-50' : 'text-text-primary hover:bg-surface-subtle'} ${wardrobe.length === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}
+                            onClick={handleTrashClick}
+                            className={`p-2 rounded-full transition-colors relative z-10 ${isSelectionMode && selectedIds.size > 0 ? 'text-red-600 bg-red-50' : 'text-text-primary hover:bg-surface-subtle'} ${wardrobe.length === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}
                         >
-                        <Trash2Icon className="w-5 h-5" />
+                            <Trash2Icon className="w-5 h-5" />
                         </button>
                 </div>
             </header>
@@ -161,6 +171,21 @@ const WardrobeView: React.FC<WardrobeViewProps> = ({ wardrobe, onProductSelect, 
                                         className={`w-full h-full object-cover transition-transform duration-500 ${isSelected ? 'scale-95' : 'group-hover:scale-105'}`} 
                                     />
                                     
+                                    {/* Try On Button Overlay */}
+                                    {!isSelectionMode && onTryOn && (
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                onTryOn(item);
+                                            }}
+                                            className="absolute bottom-2 right-2 p-2.5 bg-white/90 backdrop-blur-sm text-black rounded-full shadow-md border border-white/20 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-all duration-200 hover:scale-105 hover:bg-white z-20"
+                                            aria-label="Try On"
+                                            title="Try On"
+                                        >
+                                            <SparklesIcon className="w-4 h-4" />
+                                        </button>
+                                    )}
+
                                     {/* Selection Overlay */}
                                     <AnimatePresence>
                                         {isSelectionMode && (
