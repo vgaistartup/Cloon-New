@@ -161,8 +161,8 @@ const ChatBot: React.FC<ChatBotProps> = ({ isOpen, onClose }) => {
                   <div ref={messagesEndRef} />
                 </div>
 
-                {/* Input Area */}
-                <div className="p-4 bg-white border-t border-border shrink-0 pb-safe">
+                {/* Input Area - Adjusted for safe area */}
+                <div className="px-4 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] bg-white border-t border-border shrink-0">
                   <div className="flex items-center gap-2 relative">
                     <input
                       type="text"

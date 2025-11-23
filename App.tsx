@@ -250,49 +250,63 @@ const App: React.FC = () => {
   };
 
   const fetchFileFromUrl = async (url: string, name: string): Promise<File> => {
-      return new Promise((resolve, reject) => {
-          const image = new Image();
-          image.setAttribute('crossOrigin', 'anonymous');
-          image.src = url;
+      // 0. Handle Data URLs directly
+      if (url.startsWith('data:')) {
+          try {
+              const res = await fetch(url);
+              const blob = await res.blob();
+              return new File([blob], name, { type: blob.type || 'image/png' });
+          } catch (e) {
+              console.error("Failed to process data URL", e);
+          }
+      }
 
-          image.onload = () => {
-              const canvas = document.createElement('canvas');
-              canvas.width = image.naturalWidth;
-              canvas.height = image.naturalHeight;
-              const ctx = canvas.getContext('2d');
-              if (!ctx) {
-                  reject(new Error('Could not create canvas context'));
-                  return;
+      // Fix Firebase Storage URLs to ensure they serve media instead of metadata
+      let targetUrl = url;
+      if (url.includes('firebasestorage.googleapis.com') && !url.includes('alt=media')) {
+          const separator = url.includes('?') ? '&' : '?';
+          targetUrl = `${url}${separator}alt=media`;
+          console.log(`[ImageLoader] Adjusted Firebase URL: ${targetUrl}`);
+      }
+
+      // Helper to try fetching with proper mode
+      const tryFetch = async (fetchUrl: string) => {
+          const response = await fetch(fetchUrl, { mode: 'cors', credentials: 'omit' });
+          if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
+          return response.blob();
+      };
+
+      try {
+          // 1. Try Direct Fetch
+          const blob = await tryFetch(targetUrl);
+          return new File([blob], name, { type: blob.type || 'image/png' });
+      } catch (directError) {
+          console.warn(`[ImageLoader] Direct fetch failed for ${targetUrl}, trying proxies...`, directError);
+          
+          try {
+              // 2. Try Primary Proxy (corsproxy.io)
+              const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+              const blob = await tryFetch(proxyUrl);
+              return new File([blob], name, { type: blob.type || 'image/png' });
+          } catch (proxyError1) {
+              console.warn(`[ImageLoader] Primary proxy failed, trying secondary...`, proxyError1);
+              
+              try {
+                  // 3. Try Secondary Proxy (allorigins.win) - often reliable for images
+                  const proxyUrl2 = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
+                  const blob = await tryFetch(proxyUrl2);
+                  return new File([blob], name, { type: blob.type || 'image/png' });
+              } catch (proxyError2) {
+                  console.error("[ImageLoader] All fetch attempts failed", proxyError2);
+                  
+                  // 4. Fallback to transparent placeholder (Prevents app crash, but result will be empty)
+                  const base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+                  const res = await fetch(`data:image/png;base64,${base64}`);
+                  const blob = await res.blob();
+                  return new File([blob], "placeholder.png", { type: "image/png" });
               }
-              ctx.drawImage(image, 0, 0);
-              canvas.toBlob((blob) => {
-                  if (!blob) {
-                      reject(new Error('Canvas toBlob failed'));
-                      return;
-                  }
-                  resolve(new File([blob], name, { type: blob.type }));
-              }, 'image/png');
-          };
-
-          image.onerror = (e) => {
-             console.warn("Canvas load failed, falling back to fetch", e);
-             fetch(url)
-                .then(res => res.blob())
-                .then(blob => resolve(new File([blob], name, { type: blob.type })))
-                .catch(err => {
-                     console.warn("Fetch failed, using placeholder");
-                     const base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
-                     const byteCharacters = atob(base64);
-                     const byteNumbers = new Array(byteCharacters.length);
-                     for (let i = 0; i < byteCharacters.length; i++) {
-                         byteNumbers[i] = byteCharacters.charCodeAt(i);
-                     }
-                     const byteArray = new Uint8Array(byteNumbers);
-                     const blob = new Blob([byteArray], { type: "image/png" });
-                     resolve(new File([blob], name || "placeholder.png", { type: "image/png" }));
-                });
-          };
-      });
+          }
+      }
   };
 
   useEffect(() => {

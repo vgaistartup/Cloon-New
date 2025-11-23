@@ -155,7 +155,7 @@ const ProductDetail: React.FC<ProductDetailProps> = ({ products, product, onClos
                     </div>
                     
                     {/* Sticky Footer Actions */}
-                    <div className="fixed bottom-0 left-0 right-0 z-20 bg-white/90 backdrop-blur-xl border-t border-border p-4">
+                    <div className="fixed bottom-0 left-0 right-0 z-20 bg-white/90 backdrop-blur-xl border-t border-border px-4 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
                         <div className="flex items-center gap-4 max-w-lg mx-auto">
                             <button
                                 onClick={() => onToggleWardrobe(product)}

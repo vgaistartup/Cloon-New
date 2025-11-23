@@ -397,8 +397,8 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
                                     </div>
                                 ) : (
                                     <div className="flex flex-col items-center gap-4 opacity-40 group-hover:opacity-60 transition-opacity text-center">
-                                        <slot.icon className="w-20 h-20 text-gray-600" />
-                                        <span className="text-sm font-medium text-text-secondary">{slot.label}</span>
+                                        <slot.icon className="w-16 h-16 text-gray-600" />
+                                        {/* Removed Text Label per previous request */}
                                     </div>
                                 )}
                             </div>
@@ -408,7 +408,7 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
               </div>
 
               {/* Footer Actions */}
-              <div className="p-4 border-t border-border bg-white flex gap-3 shrink-0">
+              <div className="px-4 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] border-t border-border bg-white flex gap-3 shrink-0">
                   <button 
                     onClick={handleShuffle}
                     className="flex-1 py-3.5 bg-white border border-border rounded-full font-medium text-text-primary flex items-center justify-center gap-2 hover:bg-surface-subtle transition-colors"
@@ -494,7 +494,7 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
                       </div>
 
                       {/* 3. Scrollable Product Grid */}
-                      <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
+                      <div className="flex-1 overflow-y-auto p-4 bg-gray-50 pb-safe">
                           <div className="grid grid-cols-2 gap-x-4 gap-y-6 pb-20">
                               {/* Upload Option */}
                               <label className="aspect-[3/4] border border-dashed border-border rounded-card flex flex-col items-center justify-center text-text-secondary hover:border-text-primary cursor-pointer bg-white group shadow-sm hover:shadow-md transition-all">

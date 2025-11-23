@@ -33,7 +33,6 @@ const resizeImage = async (file: File): Promise<File> => {
                     height = maxDim;
                 }
             } 
-            // Even if small enough, we re-compress to JPEG to ensure low payload size
             
             const canvas = document.createElement('canvas');
             canvas.width = width;
@@ -44,20 +43,19 @@ const resizeImage = async (file: File): Promise<File> => {
                 return;
             }
             
-            // Fill white background to handle transparent PNGs (Pro model prefers solid backgrounds)
-            ctx.fillStyle = "#FFFFFF";
-            ctx.fillRect(0, 0, width, height);
+            // Clear canvas to ensure transparency is preserved
+            ctx.clearRect(0, 0, width, height);
             
             ctx.drawImage(img, 0, 0, width, height);
             
             canvas.toBlob((blob) => {
                 if (blob) {
-                    // Force convert to JPEG with 0.85 quality for optimal balance of size/quality
-                    resolve(new File([blob], "optimized_image.jpg", { type: "image/jpeg" }));
+                    // Use PNG to preserve transparency, crucial for "cut out" clothes
+                    resolve(new File([blob], "optimized_image.png", { type: "image/png" }));
                 } else {
                     reject(new Error("Image resizing failed"));
                 }
-            }, "image/jpeg", 0.85); 
+            }, "image/png"); 
         };
         
         img.onerror = (e) => {
@@ -174,51 +172,11 @@ const generateWithFallback = async (
     }
 };
 
-export const generateModelImage = async (userImage: File): Promise<string> => {
-    const userImagePart = await fileToPart(userImage);
-    const prompt = "Create a high-fashion model photo of this person. Full body shot. Standing in a confident, relaxed pose. Background: PURE WHITE #FFFFFF. Soft, studio lighting. Preserve facial features exactly.";
-    
-    return generateWithFallback(
-        { parts: [userImagePart, { text: prompt }] },
-        { imageConfig: { aspectRatio: '3:4' } },
-        "generateModelImage"
-    );
-};
-
-export const generateVirtualTryOnImage = async (modelImageUrl: string, garmentImage: File): Promise<string> => {
-    const modelImagePart = dataUrlToPart(modelImageUrl);
-    const garmentImagePart = await fileToPart(garmentImage);
-    
-    // Pro Model Prompt Strategy: Persona + Explicit Constraints
-    const contentsParts = [
-        { text: "You are an expert digital fashion editor." },
-        { text: "REFERENCE MODEL (Preserve Identity & Body Shape):" },
-        modelImagePart,
-        { text: "TARGET GARMENT (Warp & Fit to Model):" },
-        garmentImagePart,
-        { text: `
-        TASK: Generate a photorealistic image of the Reference Model wearing the Target Garment.
-
-        CRITICAL INSTRUCTIONS:
-        1. IDENTITY PRESERVATION: The face, hair, and body shape MUST be identical to the Reference Model.
-        2. OUTFIT SWAP: Completely replace the original outfit with the Target Garment.
-        3. FIT & DRAPE: The new garment should fit naturally, following the model's pose and body curves.
-        4. BACKGROUND: Pure White (#FFFFFF). No shadows.
-        
-        Return ONLY the generated image.
-        ` }
-    ];
-    
-    return generateWithFallback(
-        { parts: contentsParts },
-        { imageConfig: { aspectRatio: '3:4' } },
-        "generateVirtualTryOnImage"
-    );
-};
-
 // Helper to analyze a garment and generate a description + category classification
 const generateItemDescription = async (file: File): Promise<{ category: 'Major' | 'Minor', description: string, file: File }> => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) throw new Error("No API Key");
+    const ai = new GoogleGenAI({ apiKey });
     const imagePart = await fileToPart(file);
     
     const prompt = `
@@ -258,6 +216,60 @@ const generateItemDescription = async (file: File): Promise<{ category: 'Major' 
         console.warn("Failed to analyze item description, defaulting to Major.", e);
         return { category: 'Major', description: '', file };
     }
+};
+
+export const generateModelImage = async (userImage: File): Promise<string> => {
+    const userImagePart = await fileToPart(userImage);
+    const prompt = "Create a high-fashion model photo of this person. Full body shot. Standing in a confident, relaxed pose. Background: PURE WHITE #FFFFFF. Soft, studio lighting. Preserve facial features exactly.";
+    
+    return generateWithFallback(
+        { parts: [userImagePart, { text: prompt }] },
+        { imageConfig: { aspectRatio: '3:4' } },
+        "generateModelImage"
+    );
+};
+
+export const generateVirtualTryOnImage = async (modelImageUrl: string, garmentImage: File): Promise<string> => {
+    const modelImagePart = dataUrlToPart(modelImageUrl);
+    const garmentImagePart = await fileToPart(garmentImage);
+    
+    // 1. Analyze the garment to get a text description (Double-Lock Strategy)
+    // This prevents "White-on-White" hallucinations where a transparent image is ignored.
+    let garmentDescription = "a fashion item";
+    try {
+        const analysis = await generateItemDescription(garmentImage);
+        garmentDescription = analysis.description;
+    } catch (e) {
+        console.warn("Could not generate text description for garment, proceeding with image only.");
+    }
+
+    // Reworded Prompt Strategy: Force Replacement
+    const contentsParts = [
+        { text: "INPUT 1: The Person (The Target Body)." },
+        modelImagePart,
+        { text: "INPUT 2: The Clothing (The Source Garment)." },
+        garmentImagePart,
+        { text: `
+        TASK: REPLACE the outfit of the person in INPUT 1 with the clothing from INPUT 2.
+        
+        INPUT 2 DESCRIPTION: ${garmentDescription}
+
+        STRICT RULES:
+        1. IGNORE the original clothes in INPUT 1. They must be completely replaced.
+        2. USE INPUT 2: The texture, pattern, color, and shape of the garment in INPUT 2 must be rendered on the person. Match the VISUAL DETAILS described above.
+        3. PRESERVE IDENTITY: The person's face, hair, body type, and pose must match INPUT 1 exactly.
+        4. REALISM: The new clothing must drape naturally on the body.
+        5. BACKGROUND: Pure White (#FFFFFF).
+        
+        Output: A single photorealistic image of the person wearing the new clothes.
+        ` }
+    ];
+    
+    return generateWithFallback(
+        { parts: contentsParts },
+        { imageConfig: { aspectRatio: '3:4' } },
+        "generateVirtualTryOnImage"
+    );
 };
 
 export const analyzeWardrobeItem = async (file: File): Promise<Partial<WardrobeItem>> => {
@@ -339,26 +351,26 @@ export const generateCompleteLook = async (modelImageUrl: string, garmentImages:
     const minorItemDescriptions = minorItems.map(item => item.description).join(". Also wearing ");
     
     const contentsParts: any[] = [
-        { text: "You are an expert digital stylist." },
-        { text: "REFERENCE MODEL:" },
+        { text: "INPUT 1: The Reference Model (Body Source)." },
         modelImagePart
     ];
 
     if (majorItemParts.length > 0) {
-        contentsParts.push({ text: "PRIMARY CLOTHING (Composite these textures onto model):" });
+        contentsParts.push({ text: "INPUT 2: The Clothing Stack (Apparel Source)." });
         contentsParts.push(...majorItemParts);
     }
 
     contentsParts.push({ text: `
-        TASK: Create a coherent full-body fashion look.
+        TASK: COMPOSITE the Clothing from INPUT 2 onto the Model in INPUT 1.
         
-        INSTRUCTIONS:
-        1. Apply the PRIMARY CLOTHING items to the model.
-        2. ${minorItemDescriptions ? `Include these ACCESSORIES: ${minorItemDescriptions}.` : ''}
-        3. Ensure the face and body match the REFERENCE MODEL exactly.
-        4. Background: Pure White (#FFFFFF).
+        EXECUTION:
+        1. The Model's identity, pose, and body shape must remain 100% IDENTICAL to INPUT 1.
+        2. REPLACE the original clothes on the model with the items provided in INPUT 2.
+        3. TEXTURE TRANSFER: You must transfer the specific textures, prints, and logos of the source clothing. Do not generate generic clothes.
+        4. ${minorItemDescriptions ? `ACCESSORIES: Incorporate these additional items: ${minorItemDescriptions}.` : ''}
+        5. BACKGROUND: Pure White (#FFFFFF).
         
-        Return ONLY the final image.
+        Output: A single high-fashion image.
     `});
     
     return generateWithFallback(
@@ -400,7 +412,7 @@ export const generateLookVariation = async (
         - Target Vibe: ${vibeInstruction}
         
         CRITICAL INSTRUCTIONS:
-        1. IDENTITY & OUTFIT: Preserve the face, hair, body type, and outfit details IDENTICAL to the Reference Image.
+        1. IDENTITY & OUTFIT: Preserve the face, hair, body type, and outfit details IDENTICAL to the Reference Image. DO NOT CHANGE THE CLOTHES.
         2. PHYSICS & LIGHTING: Ensure the lighting of the environment interacts realistically with the fabric. ${materialLogic}
         3. POSE: ${config.pose ? "Change the pose as requested." : "Keep the pose natural and consistent with the new environment."}
         4. COMPOSITION: The subject must look anchored in the scene, not pasted.
