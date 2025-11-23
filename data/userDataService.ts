@@ -74,6 +74,29 @@ export const userDataService = {
      }
   },
 
+  async getAllModels(): Promise<Model[]> {
+      try {
+        const userId = await getAuthUserId();
+        const { data, error } = await supabase
+            .from('user_models')
+            .select('*')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false });
+
+        if (error) throw error;
+
+        return (data || []).map((row: any) => ({
+            id: row.id,
+            url: row.url,
+            userId: row.user_id,
+            createdAt: new Date(row.created_at).getTime()
+        }));
+      } catch (error) {
+          console.error("Error fetching all models:", error);
+          return [];
+      }
+  },
+
   async saveLook(look: Omit<Look, 'id' | 'timestamp'>): Promise<Look | null> {
       try {
         const userId = await getAuthUserId();

@@ -13,7 +13,7 @@ import Canvas from './components/Canvas';
 import WardrobePanel from './components/WardrobeModal';
 import OutfitStack from './components/OutfitStack';
 import { generateVirtualTryOnImage, generateLookVariation, analyzeOutfitStyle, generateCompleteLook, analyzeWardrobeItem } from './services/geminiService';
-import { OutfitLayer, WardrobeItem, Look, GenerationTask } from './types';
+import { OutfitLayer, WardrobeItem, Look, GenerationTask, Model } from './types';
 import { XIcon, LockIcon } from './components/icons';
 import { defaultWardrobe } from './wardrobe';
 import { getFriendlyErrorMessage } from './lib/utils';
@@ -63,6 +63,7 @@ const App: React.FC = () => {
   // Model & Look State
   const [modelImageUrl, setModelImageUrl] = useState<string | null>(null);
   const [modelId, setModelId] = useState<string | null>(null);
+  const [availableModels, setAvailableModels] = useState<Model[]>([]);
   const [savedLooks, setSavedLooks] = useState<Look[]>([]);
   const [initialLookId, setInitialLookId] = useState<string | null>(null);
   
@@ -144,37 +145,29 @@ const App: React.FC = () => {
       if (!session) return;
       
       try {
-          const [model, dbLooks, dbWardrobe] = await Promise.all([
-              userDataService.getLatestModel(),
+          const [allModels, dbLooks, dbWardrobe] = await Promise.all([
+              userDataService.getAllModels(),
               userDataService.getLooks(),
               userDataService.getWardrobe()
           ]);
           
-          let initialLooks: Look[] = [];
+          setAvailableModels(allModels);
 
-          if (model) {
-              setModelImageUrl(model.url);
-              setModelId(model.id);
-              
-              const baseLook: Look = {
-                  id: `model-base-${model.id}`,
-                  url: model.url,
-                  garments: [],
-                  timestamp: model.createdAt,
-                  userId: model.userId
-              };
-              initialLooks.push(baseLook);
+          // Select latest model if available and none currently selected
+          if (allModels.length > 0 && !modelId) {
+              const latest = allModels[0];
+              setModelImageUrl(latest.url);
+              setModelId(latest.id);
           }
 
-          const combinedLooks = [...initialLooks, ...dbLooks].sort((a, b) => b.timestamp - a.timestamp);
-          
-          setSavedLooks(combinedLooks);
+          // Looks are independent of the active model, they are historical records
+          setSavedLooks(dbLooks.sort((a, b) => b.timestamp - a.timestamp));
           setWardrobe(dbWardrobe);
 
       } catch (err) {
           console.error("Failed to load user data:", err);
       }
-  }, [session]);
+  }, [session, modelId]);
 
   useEffect(() => {
     if (session && hasApiKey) {
@@ -207,20 +200,13 @@ const App: React.FC = () => {
   const handleModelFinalized = async (url: string) => {
     setModelImageUrl(url);
 
-    const tempLookId = `temp-base-${Date.now()}`;
-    const baseLook: Look = {
-        id: tempLookId,
-        url: url,
-        garments: [],
-        timestamp: Date.now(),
-        userId: session?.user?.id
-    };
-    setSavedLooks(prev => [baseLook, ...prev]);
-    
     try {
         const savedModel = await userDataService.saveModel(url);
         if (savedModel) {
             setModelId(savedModel.id);
+            // Refresh available models
+            const allModels = await userDataService.getAllModels();
+            setAvailableModels(allModels);
         }
     } catch (err) {
         console.error("Failed to save model:", err);
@@ -230,23 +216,19 @@ const App: React.FC = () => {
   };
 
   const handleCreateNewAvatar = async () => {
-        if (modelId) {
-            try {
-                await userDataService.deleteModel(modelId);
-            } catch (err) {
-                console.error("Failed to delete old model from DB:", err);
-            }
-        }
-
+        // Do not delete old model, just reset state to allow creation of a new one
+        // The user can switch back to old ones later.
         setModelImageUrl(null);
         setModelId(null);
         setIsLoading(false);
         setLoadingMessage('');
         setError(null);
-        setWardrobe(defaultWardrobe); 
-        setWishlist([]);
-        setSavedLooks([]); 
-        setGenerationQueue([]);
+        // We keep wardrobe and saved looks
+  };
+  
+  const handleSelectModel = (model: Model) => {
+      setModelImageUrl(model.url);
+      setModelId(model.id);
   };
 
   const fetchFileFromUrl = async (url: string, name: string): Promise<File> => {
@@ -713,6 +695,9 @@ const App: React.FC = () => {
                     looks={savedLooks} 
                     products={products} 
                     modelImageUrl={modelImageUrl} 
+                    activeModelId={modelId}
+                    availableModels={availableModels}
+                    onSelectModel={handleSelectModel}
                     onModelFinalized={handleModelFinalized} 
                     onCreateNewAvatar={handleCreateNewAvatar} 
                     onDeleteLook={handleDeleteLook} 

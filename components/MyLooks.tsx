@@ -7,7 +7,7 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import StartScreen from './StartScreen';
 import { DotsVerticalIcon, RotateCcwIcon, ShareIcon, Trash2Icon, PlusIcon, UserIcon, SparklesIcon, SkeletonFrontIcon, SkeletonThreeQuarterIcon, SkeletonSideIcon, SkeletonWalkIcon, SkeletonActionIcon, SkeletonLeanIcon, XIcon, ChevronDownIcon } from './icons';
 import { motion, AnimatePresence, PanInfo } from 'framer-motion';
-import { Look } from '../types';
+import { Look, Model } from '../types';
 import { Product } from '../data/products';
 import { VIBE_OPTIONS } from '../data/vibes';
 
@@ -15,6 +15,9 @@ interface MyLooksProps {
     looks: Look[];
     products: Product[];
     modelImageUrl: string | null;
+    activeModelId?: string | null;
+    availableModels?: Model[];
+    onSelectModel?: (model: Model) => void;
     onModelFinalized: (url: string) => void;
     onCreateNewAvatar: () => void;
     onDeleteLook: (id: string) => void;
@@ -29,7 +32,7 @@ interface MyLooksProps {
 }
 
 type SortOrder = 'newest' | 'oldest';
-type SheetMode = 'products' | 'edit';
+type SheetMode = 'products' | 'edit' | 'avatars';
 type EditTab = 'body' | 'vibe';
 
 const POSE_OPTIONS = [
@@ -41,7 +44,7 @@ const POSE_OPTIONS = [
     { label: 'Leaning', instruction: 'Leaning against a wall, casual', icon: SkeletonLeanIcon },
 ];
 
-const MyLooks: React.FC<MyLooksProps> = ({ looks, products, modelImageUrl, onModelFinalized, onCreateNewAvatar, onDeleteLook, onProductSelect, initialLookId, onResetInitialLookId, onRemix, onPoseSelect, generationProgress, queueCount = 0, onClose }) => {
+const MyLooks: React.FC<MyLooksProps> = ({ looks, products, modelImageUrl, activeModelId, availableModels = [], onSelectModel, onModelFinalized, onCreateNewAvatar, onDeleteLook, onProductSelect, initialLookId, onResetInitialLookId, onRemix, onPoseSelect, generationProgress, queueCount = 0, onClose }) => {
     const [activeIndex, setActiveIndex] = useState(0);
     const [isMenuOpen, setIsMenuOpen] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -117,9 +120,11 @@ const MyLooks: React.FC<MyLooksProps> = ({ looks, products, modelImageUrl, onMod
 
     // Reset sheet mode when changing looks
     useEffect(() => {
-        setSheetMode('products');
-        setEditTab('body');
-        setSelectedVibeId(null);
+        if (sheetMode !== 'avatars') {
+            setSheetMode('products');
+            setEditTab('body');
+            setSelectedVibeId(null);
+        }
     }, [activeIndex]);
 
     const currentLookItems = useMemo(() => {
@@ -218,6 +223,12 @@ const MyLooks: React.FC<MyLooksProps> = ({ looks, products, modelImageUrl, onMod
             setIsSheetOpen(false);
             setSheetMode('products');
         }
+    };
+    
+    const handleSwitchModelClick = () => {
+        setIsMenuOpen(false);
+        setSheetMode('avatars');
+        setIsSheetOpen(true);
     };
 
     const isBaseModel = useMemo(() => {
@@ -328,6 +339,14 @@ const MyLooks: React.FC<MyLooksProps> = ({ looks, products, modelImageUrl, onMod
                         transition={{ duration: 0.1 }}
                         className="fixed top-12 right-4 w-60 bg-white rounded-xl shadow-float border border-border z-50 p-1 overflow-hidden"
                     >
+                        <button
+                            onClick={handleSwitchModelClick}
+                            className="w-full text-left px-4 py-3 rounded-lg text-sm text-text-primary hover:bg-surface-subtle flex items-center gap-3 transition-all font-medium"
+                        >
+                            <UserIcon className="w-4 h-4" />
+                            Switch Avatar
+                        </button>
+
                         <button
                             onClick={handleShareLook}
                             className="w-full text-left px-4 py-3 rounded-lg text-sm text-text-primary hover:bg-surface-subtle flex items-center gap-3 transition-all"
@@ -499,6 +518,47 @@ const MyLooks: React.FC<MyLooksProps> = ({ looks, products, modelImageUrl, onMod
                                                         )
                                                     })
                                                 )}
+                                            </div>
+                                        </motion.div>
+                                    ) : sheetMode === 'avatars' ? (
+                                        <motion.div
+                                            key="avatars"
+                                            initial={{ opacity: 0, x: 20 }}
+                                            animate={{ opacity: 1, x: 0 }}
+                                            exit={{ opacity: 0, x: -20 }}
+                                            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                                        >
+                                            <h2 className="text-lg font-bold text-text-primary mb-4">Select Avatar</h2>
+                                            <div className="flex overflow-x-auto gap-4 pb-2 scrollbar-hide -mx-6 px-6">
+                                                {availableModels.map((model) => {
+                                                    const isActive = model.id === activeModelId;
+                                                    return (
+                                                        <div
+                                                            key={model.id}
+                                                            className={`flex-shrink-0 w-28 cursor-pointer group`}
+                                                            onClick={() => {
+                                                                if (onSelectModel) onSelectModel(model);
+                                                                setIsSheetOpen(false);
+                                                            }}
+                                                        >
+                                                            <div className={`aspect-[3/4] rounded-lg overflow-hidden bg-white shadow-soft transition-all relative border ${isActive ? 'border-black ring-2 ring-black ring-offset-1' : 'border-border group-hover:border-gray-300'}`}>
+                                                                <img 
+                                                                    src={model.url} 
+                                                                    alt="Model" 
+                                                                    className="w-full h-full object-cover object-top" 
+                                                                />
+                                                                {isActive && (
+                                                                    <div className="absolute top-2 right-2 bg-black text-white p-1 rounded-full shadow-sm">
+                                                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                            <p className="text-[10px] font-medium text-text-secondary mt-2 text-center">
+                                                                {new Date(model.createdAt).toLocaleDateString()}
+                                                            </p>
+                                                        </div>
+                                                    );
+                                                })}
                                             </div>
                                         </motion.div>
                                     ) : (

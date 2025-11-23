@@ -11,6 +11,30 @@ import { WardrobeItem } from "../types";
 const PRIMARY_MODEL = 'gemini-3-pro-image-preview';
 const FALLBACK_MODEL = 'gemini-2.5-flash-image';
 
+// --- Types ---
+
+export interface UserIdentityAnalysis {
+    subject_identity: {
+        gender: string;
+        age_approx: number;
+        ethnicity_descriptor: string;
+        body_type: string;
+    };
+    facial_physics: {
+        skin_texture: string;
+        skin_tone_hex_approx: string;
+        undertone: string;
+        hair_details: string;
+    };
+    lighting_reference: {
+        direction: string;
+        shadow_hardness: string;
+    };
+    generation_prompt_fragment: string;
+}
+
+// --- Helper Functions ---
+
 // Helper: Resize image to max dimension (e.g. 1024px) to optimize API latency
 const resizeImage = async (file: File): Promise<File> => {
     return new Promise((resolve, reject) => {
@@ -119,15 +143,12 @@ const handleApiResponse = (response: GenerateContentResponse): string => {
 };
 
 // Helper to handle fallback logic
-// 1. Try Primary Model
-// 2. If error or timeout, Try Fallback Model
 const generateWithFallback = async (
     contents: any, 
     config: any, 
     logContext: string
 ): Promise<string> => {
     const apiKey = process.env.API_KEY;
-    // Safety check for API key availability
     if (!apiKey) {
         throw new Error("API Key not found. Please connect your Google account.");
     }
@@ -137,7 +158,6 @@ const generateWithFallback = async (
     try {
         console.log(`[Gemini Service] ${logContext} - Attempting with ${PRIMARY_MODEL}...`);
         
-        // Race condition: If model takes > 50s, assume stuck/cancelled and trigger fallback manually
         const response = await Promise.race([
             ai.models.generateContent({
                 model: PRIMARY_MODEL,
@@ -145,7 +165,7 @@ const generateWithFallback = async (
                 config
             }),
             new Promise<never>((_, reject) => 
-                setTimeout(() => reject(new Error("Primary model timeout")), 50000)
+                setTimeout(() => reject(new Error("Primary model timeout")), 60000)
             )
         ]);
 
@@ -156,24 +176,98 @@ const generateWithFallback = async (
         console.warn(`[Gemini Service] ${logContext} - Primary model failed: ${error.message}. Switching to fallback ${FALLBACK_MODEL}.`);
         
         try {
-            const fallbackResponse = await ai.models.generateContent({
-                model: FALLBACK_MODEL,
-                contents,
-                config
-            });
+            const fallbackResponse = await Promise.race([
+                ai.models.generateContent({
+                    model: FALLBACK_MODEL,
+                    contents,
+                    config
+                }),
+                new Promise<never>((_, reject) => 
+                    setTimeout(() => reject(new Error("Fallback model timeout")), 30000)
+                )
+            ]);
             
             console.log(`[Gemini Service] ${logContext} - Success with ${FALLBACK_MODEL}`);
-            return handleApiResponse(fallbackResponse);
+            return handleApiResponse(fallbackResponse as GenerateContentResponse);
+
         } catch (fallbackError: any) {
-            console.error(`[Gemini Service] ${logContext} - Fallback model also failed: ${fallbackError.message}`);
-            // Return details of the fallback error, but also log the primary error
-            throw fallbackError;
+            console.warn(`[Gemini Service] ${logContext} - Standard fallback failed: ${fallbackError.message}. Retrying with SAFE CONFIG.`);
+            
+            try {
+                const safeResponse = await ai.models.generateContent({
+                    model: FALLBACK_MODEL,
+                    contents,
+                    config: {} 
+                });
+                
+                console.log(`[Gemini Service] ${logContext} - Success with Safe Fallback`);
+                return handleApiResponse(safeResponse);
+            } catch (finalError: any) {
+                console.error(`[Gemini Service] ${logContext} - All attempts failed. Final error: ${finalError.message}`);
+                throw finalError;
+            }
         }
     }
 };
 
-// Helper to analyze a garment and generate a description + category classification
-const generateItemDescription = async (file: File): Promise<{ category: 'Major' | 'Minor', description: string, file: File }> => {
+// --- Analysis Services ---
+
+// 1. User Identity Analysis (The "Deep Scan")
+export const analyzeUserIdentity = async (file: File): Promise<UserIdentityAnalysis> => {
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) throw new Error("No API Key");
+    const ai = new GoogleGenAI({ apiKey });
+    const imagePart = await fileToPart(file);
+
+    const prompt = `
+    Act as a High-End CGI Technical Director and Portrait Photographer.
+    Analyze this user's selfie to output a "Dense Physical Descriptor".
+
+    CRITICAL INSTRUCTION:
+    - Ignore "beauty filters". Focus on REALISM.
+    - Describe the "Imperfections" (pores, texture, asymmetry) to avoid the fake AI look.
+    - Analyze exact Skin Undertone.
+
+    OUTPUT FORMAT (Strict JSON):
+    {
+      "subject_identity": {
+        "gender": "string",
+        "age_approx": "integer",
+        "ethnicity_descriptor": "string (e.g., 'South Asian with North Indian features')",
+        "body_type": "string"
+      },
+      "facial_physics": {
+        "skin_texture": "string (Describe pores, moles, freckles, uneven pigmentation. e.g., 'Visible skin porosity, slight stubble')",
+        "skin_tone_hex_approx": "string",
+        "undertone": "string",
+        "hair_details": "string"
+      },
+      "lighting_reference": {
+        "direction": "string",
+        "shadow_hardness": "string"
+      },
+      "generation_prompt_fragment": "string (A 2-sentence prompt segment enforcing realism. e.g., 'Raw portrait photography, 85mm lens. High-frequency texture details, visible pores, no airbrushing.')" 
+    }
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash', // Vision model
+            contents: { parts: [imagePart, { text: prompt }] },
+            config: { responseMimeType: "application/json" }
+        });
+
+        const text = response.text?.trim() || "{}";
+        return JSON.parse(text) as UserIdentityAnalysis;
+    } catch (e) {
+        console.error("Failed to analyze user identity", e);
+        // Return specific fallback structure
+        throw new Error("Could not analyze face. Please try a clearer photo.");
+    }
+};
+
+// 2. Garment Analysis (Kept intact)
+export const generateItemDescription = async (file: File): Promise<{ category: 'Major' | 'Minor', description: string, file: File }> => {
     const apiKey = process.env.API_KEY;
     if (!apiKey) throw new Error("No API Key");
     const ai = new GoogleGenAI({ apiKey });
@@ -190,7 +284,7 @@ const generateItemDescription = async (file: File): Promise<{ category: 'Major' 
 
     try {
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash', // Use Flash for text analysis as it's faster and sufficient
+            model: 'gemini-2.5-flash', 
             contents: { parts: [imagePart, { text: prompt }] },
             config: { 
                 responseMimeType: "application/json",
@@ -218,60 +312,7 @@ const generateItemDescription = async (file: File): Promise<{ category: 'Major' 
     }
 };
 
-export const generateModelImage = async (userImage: File): Promise<string> => {
-    const userImagePart = await fileToPart(userImage);
-    const prompt = "Create a high-fashion model photo of this person. Full body shot. Standing in a confident, relaxed pose. Background: PURE WHITE #FFFFFF. Soft, studio lighting. Preserve facial features exactly.";
-    
-    return generateWithFallback(
-        { parts: [userImagePart, { text: prompt }] },
-        { imageConfig: { aspectRatio: '3:4' } },
-        "generateModelImage"
-    );
-};
-
-export const generateVirtualTryOnImage = async (modelImageUrl: string, garmentImage: File): Promise<string> => {
-    const modelImagePart = dataUrlToPart(modelImageUrl);
-    const garmentImagePart = await fileToPart(garmentImage);
-    
-    // 1. Analyze the garment to get a text description (Double-Lock Strategy)
-    // This prevents "White-on-White" hallucinations where a transparent image is ignored.
-    let garmentDescription = "a fashion item";
-    try {
-        const analysis = await generateItemDescription(garmentImage);
-        garmentDescription = analysis.description;
-    } catch (e) {
-        console.warn("Could not generate text description for garment, proceeding with image only.");
-    }
-
-    // Reworded Prompt Strategy: Force Replacement
-    const contentsParts = [
-        { text: "INPUT 1: The Person (The Target Body)." },
-        modelImagePart,
-        { text: "INPUT 2: The Clothing (The Source Garment)." },
-        garmentImagePart,
-        { text: `
-        TASK: REPLACE the outfit of the person in INPUT 1 with the clothing from INPUT 2.
-        
-        INPUT 2 DESCRIPTION: ${garmentDescription}
-
-        STRICT RULES:
-        1. IGNORE the original clothes in INPUT 1. They must be completely replaced.
-        2. USE INPUT 2: The texture, pattern, color, and shape of the garment in INPUT 2 must be rendered on the person. Match the VISUAL DETAILS described above.
-        3. PRESERVE IDENTITY: The person's face, hair, body type, and pose must match INPUT 1 exactly.
-        4. REALISM: The new clothing must drape naturally on the body.
-        5. BACKGROUND: Pure White (#FFFFFF).
-        
-        Output: A single photorealistic image of the person wearing the new clothes.
-        ` }
-    ];
-    
-    return generateWithFallback(
-        { parts: contentsParts },
-        { imageConfig: { aspectRatio: '3:4' } },
-        "generateVirtualTryOnImage"
-    );
-};
-
+// 3. Wardrobe Item Analysis (Kept intact)
 export const analyzeWardrobeItem = async (file: File): Promise<Partial<WardrobeItem>> => {
     const apiKey = process.env.API_KEY;
     if (!apiKey) throw new Error("No API Key");
@@ -330,33 +371,109 @@ export const analyzeWardrobeItem = async (file: File): Promise<Partial<WardrobeI
         };
     } catch (err) {
         console.error("Failed to analyze wardrobe item:", err);
-        // Fallback to basic info
         return { name: file.name };
     }
+};
+
+// --- Generation Functions ---
+
+export const generateModelImage = async (userImage: File, analysis: UserIdentityAnalysis): Promise<string> => {
+    const userImagePart = await fileToPart(userImage);
+    
+    // Enhanced prompt for hyper-realism using the analysis data
+    const prompt = `
+    Generate a HYPER-PHOTOREALISTIC full-body fashion portrait of this person.
+
+    SUBJECT IDENTITY:
+    - Ethnicity/Features: ${analysis.subject_identity.ethnicity_descriptor}
+    - Age: ${analysis.subject_identity.age_approx}
+    - Body Type: ${analysis.subject_identity.body_type}
+    
+    PHYSICAL DETAILS (CRITICAL FOR REALISM):
+    - Skin Texture: ${analysis.facial_physics.skin_texture}.
+    - Hair: ${analysis.facial_physics.hair_details}.
+    - Skin Tone: ${analysis.facial_physics.undertone} (Approx Hex: ${analysis.facial_physics.skin_tone_hex_approx}).
+    
+    PHOTOGRAPHY STYLE:
+    ${analysis.generation_prompt_fragment}
+    Shot on 35mm film, ISO 200. Natural skin texture, subsurface scattering (SSS), slight film grain, chromatic aberration, hyper-realistic, depth of field.
+    
+    MANDATORY RULES:
+    1. EXACT IDENTITY: The face must match the reference photo exactly.
+    2. NO AI SMOOTHING: Render visible pores and imperfections. Avoid the 'plastic' or 'airbrushed' look.
+    3. LIGHTING: Professional studio softbox lighting. Neutral color temperature.
+    4. POSE: Standing full-body, neutral confident pose, arms relaxed at sides.
+    5. BACKGROUND: SOLID PURE WHITE (#FFFFFF).
+    
+    Output: A raw-style photograph.
+    `;
+    
+    return generateWithFallback(
+        { parts: [userImagePart, { text: prompt }] },
+        { imageConfig: { aspectRatio: '3:4' } },
+        "generateModelImage"
+    );
+};
+
+export const generateVirtualTryOnImage = async (modelImageUrl: string, garmentImage: File): Promise<string> => {
+    const modelImagePart = dataUrlToPart(modelImageUrl);
+    const garmentImagePart = await fileToPart(garmentImage);
+    
+    // 1. Analyze the garment (Double-Lock Strategy)
+    let garmentDescription = "a fashion item";
+    try {
+        const analysis = await generateItemDescription(garmentImage);
+        garmentDescription = analysis.description;
+    } catch (e) {
+        console.warn("Could not generate text description for garment, proceeding with image only.");
+    }
+
+    const contentsParts = [
+        { text: "INPUT 1: The Person (The Target Body)." },
+        modelImagePart,
+        { text: "INPUT 2: The Clothing (The Source Garment)." },
+        garmentImagePart,
+        { text: `
+        TASK: REPLACE the outfit of the person in INPUT 1 with the clothing from INPUT 2.
+        
+        INPUT 2 DESCRIPTION: ${garmentDescription}
+
+        STRICT RULES:
+        1. CLOTHING REPLACEMENT: IGNORE the original clothes in INPUT 1. Render the item from INPUT 2 with pixel-perfect texture fidelity.
+        2. PHOTOREALISM: The final image must look like a RAW photograph. Skin must have texture (pores, wrinkles) and subsurface scattering. NO PLASTIC TEXTURES.
+        3. PRESERVE IDENTITY: The person's face, hair, and skin tone must remain identical to INPUT 1.
+        4. PHYSICS: The new clothing must drape naturally on the body.
+        5. BACKGROUND: Pure White (#FFFFFF).
+        
+        Output: A single photorealistic image.
+        ` }
+    ];
+    
+    return generateWithFallback(
+        { parts: contentsParts },
+        { imageConfig: { aspectRatio: '3:4' } },
+        "generateVirtualTryOnImage"
+    );
 };
 
 export const generateCompleteLook = async (modelImageUrl: string, garmentImages: File[]): Promise<string> => {
     const modelImagePart = dataUrlToPart(modelImageUrl);
     
-    // Step 1: Hybrid Analysis
     const analyzedItems = await Promise.all(garmentImages.map(generateItemDescription));
     
     const majorItems = analyzedItems.filter(i => i.category === 'Major');
     const minorItems = analyzedItems.filter(i => i.category === 'Minor');
     
-    // Prepare Major Items as Image Parts
     const majorItemParts = await Promise.all(majorItems.map(item => fileToPart(item.file)));
-    
-    // Prepare Minor Items as Text Descriptions
     const minorItemDescriptions = minorItems.map(item => item.description).join(". Also wearing ");
     
     const contentsParts: any[] = [
-        { text: "INPUT 1: The Reference Model (Body Source)." },
+        { text: "INPUT 1: The Reference Model." },
         modelImagePart
     ];
 
     if (majorItemParts.length > 0) {
-        contentsParts.push({ text: "INPUT 2: The Clothing Stack (Apparel Source)." });
+        contentsParts.push({ text: "INPUT 2: The Clothing Stack." });
         contentsParts.push(...majorItemParts);
     }
 
@@ -364,13 +481,13 @@ export const generateCompleteLook = async (modelImageUrl: string, garmentImages:
         TASK: COMPOSITE the Clothing from INPUT 2 onto the Model in INPUT 1.
         
         EXECUTION:
-        1. The Model's identity, pose, and body shape must remain 100% IDENTICAL to INPUT 1.
-        2. REPLACE the original clothes on the model with the items provided in INPUT 2.
-        3. TEXTURE TRANSFER: You must transfer the specific textures, prints, and logos of the source clothing. Do not generate generic clothes.
+        1. IDENTITY: The Model's identity and body shape must remain 100% IDENTICAL.
+        2. PHOTOREALISM: Render as a RAW photograph. Ensure skin has realistic texture and subsurface scattering.
+        3. TEXTURE TRANSFER: Transfer specific textures/prints of the source clothing.
         4. ${minorItemDescriptions ? `ACCESSORIES: Incorporate these additional items: ${minorItemDescriptions}.` : ''}
         5. BACKGROUND: Pure White (#FFFFFF).
         
-        Output: A single high-fashion image.
+        Output: A single high-fashion photorealistic image.
     `});
     
     return generateWithFallback(
@@ -380,7 +497,6 @@ export const generateCompleteLook = async (modelImageUrl: string, garmentImages:
     );
 };
 
-// Merged functionality for Pose and Vibe variations
 export const generateLookVariation = async (
     referenceImageUrl: string, 
     config: { pose?: string, vibe?: string }
@@ -390,14 +506,13 @@ export const generateLookVariation = async (
     const poseInstruction = config.pose || "Maintain the current pose exactly.";
     const vibeInstruction = config.vibe || "isolated on a pure white background, soft even studio lighting.";
 
-    // Logic to inject specific material physics instructions based on the Vibe keyword
     let materialLogic = "";
     if (config.vibe?.toLowerCase().includes("tokyo")) {
-        materialLogic = "MATERIAL PHYSICS: If the outfit contains Leather, Plastic, or Satin, render distinct neon reflections (pink/blue) on the surface. If Cotton or Wool, simulate soft ambient light absorption. Wet ground reflections must match the shoe color.";
+        materialLogic = "MATERIAL PHYSICS: If the outfit contains Leather, Plastic, or Satin, render distinct neon reflections (pink/blue). If Cotton or Wool, simulate soft ambient light absorption. Wet ground reflections.";
     } else if (config.vibe?.toLowerCase().includes("golden")) {
-        materialLogic = "MATERIAL PHYSICS: Add strong warm backlighting (rim light) to hair and shoulders. Translucent fabrics should glow slightly. Shadows should be long and soft.";
+        materialLogic = "MATERIAL PHYSICS: Add strong warm backlighting (rim light). Translucent fabrics should glow slightly. Shadows should be long and soft.";
     } else if (config.vibe?.toLowerCase().includes("flash")) {
-        materialLogic = "MATERIAL PHYSICS: High reflectivity on sequins/jewelry due to direct flash. High contrast shadows.";
+        materialLogic = "MATERIAL PHYSICS: High reflectivity on sequins/jewelry due to direct flash. High contrast hard shadows.";
     }
 
     const contentsParts = [
@@ -412,12 +527,12 @@ export const generateLookVariation = async (
         - Target Vibe: ${vibeInstruction}
         
         CRITICAL INSTRUCTIONS:
-        1. IDENTITY & OUTFIT: Preserve the face, hair, body type, and outfit details IDENTICAL to the Reference Image. DO NOT CHANGE THE CLOTHES.
+        1. IDENTITY & REALISM: Preserve the face, hair, and skin tone IDENTICAL to the Reference Image. Render with PHOTOREALISTIC skin texture (pores, imperfections). No 'AI plastic' skin.
         2. PHYSICS & LIGHTING: Ensure the lighting of the environment interacts realistically with the fabric. ${materialLogic}
-        3. POSE: ${config.pose ? "Change the pose as requested." : "Keep the pose natural and consistent with the new environment."}
-        4. COMPOSITION: The subject must look anchored in the scene, not pasted.
+        3. POSE: ${config.pose ? "Change the pose as requested." : "Keep the pose natural."}
+        4. COMPOSITION: The subject must look anchored in the scene.
         
-        Return ONLY the image.
+        Return ONLY the photorealistic image.
         ` }
     ];
 
@@ -428,7 +543,7 @@ export const generateLookVariation = async (
     );
 };
 
-// Legacy wrapper for compatibility if needed, though we update usage in App.tsx
+// Legacy wrapper
 export const generatePoseVariation = async (url: string, pose: string) => {
     return generateLookVariation(url, { pose });
 };
@@ -439,9 +554,9 @@ export const createStylistChat = (): Chat => {
     const ai = new GoogleGenAI({ apiKey });
     
     return ai.chats.create({
-        model: 'gemini-3-pro-preview', // Chat uses Pro for reasoning capability
+        model: 'gemini-3-pro-preview', 
         config: {
-            systemInstruction: "You are a friendly, knowledgeable, and encouraging fashion stylist assistant embedded in a Virtual Try-On app. Help users with style advice, outfit coordination, color theory, and fashion trends. Keep your responses concise, helpful, and conversational. Do not ask the user to upload photos to the chat, as you cannot see them directly, but you can guide them on how to use the app's try-on features.",
+            systemInstruction: "You are a friendly, knowledgeable fashion stylist. Help users with style advice. Keep responses concise.",
             thinkingConfig: { thinkingBudget: 2048 },
         }
     });
@@ -453,10 +568,10 @@ export const analyzeOutfitStyle = async (imageBase64: string): Promise<{ score: 
     const ai = new GoogleGenAI({ apiKey });
     
     const imagePart = dataUrlToPart(imageBase64);
-    const prompt = "Analyze the outfit worn by the person in this image. Rate the style on a scale of 1 to 10 based on color coordination, fit, and overall aesthetic. Provide a brief, helpful fashion stylist explanation (max 50 words).";
+    const prompt = "Analyze the outfit. Rate style 1-10. Provide a brief stylist explanation (max 50 words).";
 
     const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash', // Flash is sufficient for text analysis
+        model: 'gemini-2.5-flash',
         contents: { parts: [imagePart, { text: prompt }] },
         config: {
             responseMimeType: "application/json",
@@ -472,7 +587,6 @@ export const analyzeOutfitStyle = async (imageBase64: string): Promise<{ score: 
     });
 
     const cleanJson = response.text?.replace(/```json|```/g, '').trim();
-    
     if (cleanJson) {
         try {
             return JSON.parse(cleanJson);

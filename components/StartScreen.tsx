@@ -8,7 +8,7 @@ import React, { useState, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { UploadCloudIcon } from './icons';
 import { Compare } from './ui/compare';
-import { generateModelImage } from '../services/geminiService';
+import { generateModelImage, analyzeUserIdentity } from '../services/geminiService';
 import Spinner from './Spinner';
 import { getFriendlyErrorMessage } from '../lib/utils';
 
@@ -19,7 +19,7 @@ interface StartScreenProps {
 const StartScreen: React.FC<StartScreenProps> = ({ onModelFinalized }) => {
   const [userImageUrl, setUserImageUrl] = useState<string | null>(null);
   const [generatedModelUrl, setGeneratedModelUrl] = useState<string | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [loadingState, setLoadingState] = useState<'idle' | 'analyzing' | 'generating'>('idle');
   const [error, setError] = useState<string | null>(null);
   
   const currentFileRef = useRef<File | null>(null);
@@ -34,7 +34,7 @@ const StartScreen: React.FC<StartScreenProps> = ({ onModelFinalized }) => {
     currentFileRef.current = file;
     setGeneratedModelUrl(null);
     setError(null);
-    setIsGenerating(true);
+    setLoadingState('analyzing');
 
     // Local Preview
     const reader = new FileReader();
@@ -45,19 +45,25 @@ const StartScreen: React.FC<StartScreenProps> = ({ onModelFinalized }) => {
     };
     reader.readAsDataURL(file);
 
-    // Generate Model (Handles Pro -> Flash fallback internally)
     try {
-        const url = await generateModelImage(file);
+        // Step 1: Deep Analysis (Flash Vision)
+        const analysis = await analyzeUserIdentity(file);
+        
+        if (currentFileRef.current !== file) return; // Cancelled
+        
+        // Step 2: Generation (Pro/Flash with Analysis Data)
+        setLoadingState('generating');
+        const url = await generateModelImage(file, analysis);
         
         if (currentFileRef.current !== file) return; // Cancelled
         
         setGeneratedModelUrl(url);
-        setIsGenerating(false);
+        setLoadingState('idle');
     } catch (err) {
         if (currentFileRef.current !== file) return;
         
         console.error("Generation failed", err);
-        setIsGenerating(false);
+        setLoadingState('idle');
         setError(getFriendlyErrorMessage(err, 'Failed to create model'));
     }
         
@@ -72,7 +78,7 @@ const StartScreen: React.FC<StartScreenProps> = ({ onModelFinalized }) => {
   const reset = () => {
     setUserImageUrl(null);
     setGeneratedModelUrl(null);
-    setIsGenerating(false);
+    setLoadingState('idle');
     setError(null);
     currentFileRef.current = null;
   };
@@ -82,6 +88,8 @@ const StartScreen: React.FC<StartScreenProps> = ({ onModelFinalized }) => {
     animate: { opacity: 1, y: 0 },
     exit: { opacity: 0, y: -20 },
   };
+
+  const isLoading = loadingState !== 'idle';
 
   return (
     <AnimatePresence mode="wait">
@@ -144,10 +152,12 @@ const StartScreen: React.FC<StartScreenProps> = ({ onModelFinalized }) => {
               Review your AI-generated model.
             </p>
             
-            {isGenerating && (
-              <div className="flex items-center gap-3 text-sm text-text-primary font-medium bg-white px-6 py-3 rounded-full shadow-soft mt-6 border border-border">
+            {isLoading && (
+              <div className="flex items-center gap-3 text-sm text-text-primary font-medium bg-white px-6 py-3 rounded-full shadow-soft mt-6 border border-border animate-pulse">
                 <Spinner />
-                <span>Designing your model...</span>
+                <span>
+                    {loadingState === 'analyzing' ? 'Scanning facial physics...' : 'Designing your model...'}
+                </span>
               </div>
             )}
 
@@ -160,7 +170,7 @@ const StartScreen: React.FC<StartScreenProps> = ({ onModelFinalized }) => {
             }
             
             <AnimatePresence>
-              {generatedModelUrl && !isGenerating && !error && (
+              {generatedModelUrl && !isLoading && !error && (
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -187,15 +197,14 @@ const StartScreen: React.FC<StartScreenProps> = ({ onModelFinalized }) => {
           
           <div className="flex-1 relative w-full flex items-center justify-center min-h-0">
             <div 
-              className={`relative rounded-[28px] overflow-hidden transition-all duration-700 ${isGenerating ? 'ring-4 ring-black/5' : ''} h-full w-auto aspect-[3/4] max-w-full object-contain bg-white`}
+              className={`relative rounded-[28px] overflow-hidden transition-all duration-700 ${isLoading ? 'ring-4 ring-black/5' : ''} h-full w-auto aspect-[3/4] max-w-full object-contain bg-white`}
             >
               <Compare
                 firstImage={userImageUrl}
                 secondImage={generatedModelUrl ?? userImageUrl}
                 slideMode="drag"
                 className="w-full h-full bg-white"
-                // Applying the filter to the second image (the generated model)
-                secondImageClassname="brightness-[1.08] contrast-[1.05]"
+                secondImageClassname="brightness-[1.05] contrast-[1.02]"
               />
             </div>
           </div>
