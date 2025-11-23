@@ -16,6 +16,7 @@ export interface Product extends WardrobeItem {
     urls?: string[]; // Array for multiple product images
     category?: ProductCategory;
     subCategory?: string;
+    description?: string;
 }
 
 export const PRODUCT_CATEGORIES_CONFIG = [

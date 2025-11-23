@@ -119,8 +119,17 @@ const ProductDetail: React.FC<ProductDetailProps> = ({ products, product, onClos
                                 </button>
                             </div>
 
+                            {/* Description */}
+                            {product.description && (
+                                <div className="text-sm text-text-secondary leading-relaxed font-medium">
+                                    {product.description.split('\n').map((line, i) => (
+                                        <p key={i} className="mb-2 last:mb-0">{line}</p>
+                                    ))}
+                                </div>
+                            )}
+
                             <a href={product.affiliateLink} target="_blank" rel="noopener noreferrer" className="flex justify-between items-center py-4 border-y border-border">
-                                <span className="text-base font-medium text-text-primary">SSENSE</span>
+                                <span className="text-base font-medium text-text-primary uppercase tracking-wide">{product.brand}</span>
                                 <div className="flex items-center gap-2">
                                     <span className="text-base font-medium text-text-primary">${product.salePrice ?? product.price}</span>
                                     <ArrowUpRightIcon className="w-5 h-5 text-text-secondary" />

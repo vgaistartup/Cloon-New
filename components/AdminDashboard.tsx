@@ -65,7 +65,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack }) => {
             urls, 
             category: product?.category || 'top', 
             subCategory: product?.subCategory,
-            affiliateLink
+            affiliateLink,
+            description: product?.description || ''
         });
         setIsModalOpen(true);
         setModalError(null);
@@ -102,6 +103,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack }) => {
             urls: cleanUrls,
             category: editingProduct.category as ProductCategory,
             subCategory: editingProduct.subCategory,
+            description: editingProduct.description,
         };
 
         try {
@@ -132,7 +134,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack }) => {
         }
     };
     
-    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
         if (!editingProduct) return;
         const { name, value } = e.target;
         const isNumeric = ['price', 'salePrice'].includes(name);
@@ -350,6 +352,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBack }) => {
                             <div className="grid grid-cols-2 gap-4">
                                 <input type="number" name="price" value={editingProduct.price || ''} onChange={handleInputChange} placeholder="Price" className="w-full p-3.5 bg-surface-subtle border-transparent rounded-btn focus:bg-white focus:border-border focus:shadow-soft outline-none transition-all" />
                                 <input type="number" name="salePrice" value={editingProduct.salePrice || ''} onChange={handleInputChange} placeholder="Sale Price (Optional)" className="w-full p-3.5 bg-surface-subtle border-transparent rounded-btn focus:bg-white focus:border-border focus:shadow-soft outline-none transition-all" />
+                            </div>
+                            
+                            <div>
+                                <label className="block text-sm font-bold text-text-secondary mb-2">Product Description</label>
+                                <textarea 
+                                    name="description" 
+                                    value={editingProduct.description || ''} 
+                                    onChange={handleInputChange} 
+                                    placeholder="Enter product details and description..." 
+                                    className="w-full p-3.5 bg-surface-subtle border-transparent rounded-btn focus:bg-white focus:border-border focus:shadow-soft outline-none transition-all min-h-[100px] resize-y"
+                                />
                             </div>
                             
                             <div>
