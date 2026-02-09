@@ -1,4 +1,3 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -9,7 +8,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from './lib/supabaseClient'; // Auth Client
 import Auth from './components/Auth'; // Auth Screen
 import StartScreen from './components/StartScreen';
-import Canvas from './components/Canvas';
 import WardrobePanel from './components/WardrobeModal';
 import OutfitStack from './components/OutfitStack';
 import { generateVirtualTryOnImage, generateLookVariation, analyzeOutfitStyle, generateCompleteLook, analyzeWardrobeItem } from './services/geminiService';
@@ -25,7 +23,7 @@ import BottomNav, { Tab } from './components/BottomNav';
 import Home from './components/Home';
 import MyLooks from './components/MyLooks';
 import WardrobeView from './components/WardrobeView';
-import { Product } from './data/products';
+import { Product } from './types';
 import { productService } from './data/productService';
 import ProductDetail from './components/ProductDetail';
 import SplashScreen from './components/SplashScreen';
@@ -66,6 +64,7 @@ const App: React.FC = () => {
   const [availableModels, setAvailableModels] = useState<Model[]>([]);
   const [savedLooks, setSavedLooks] = useState<Look[]>([]);
   const [initialLookId, setInitialLookId] = useState<string | null>(null);
+  const [isCreatingNewModel, setIsCreatingNewModel] = useState(false);
   
   // Queue & Progress State
   const [generationQueue, setGenerationQueue] = useState<GenerationTask[]>([]);
@@ -141,10 +140,14 @@ const App: React.FC = () => {
       }
   }, []);
 
+  // Optimization: Stable userId dependency to prevent re-fetching on token refresh
+  const userId = session?.user?.id;
+
   const loadUserData = useCallback(async () => {
-      if (!session) return;
+      if (!userId) return;
       
       try {
+          // Parallel fetch for speed
           const [allModels, dbLooks, dbWardrobe] = await Promise.all([
               userDataService.getAllModels(),
               userDataService.getLooks(),
@@ -152,41 +155,40 @@ const App: React.FC = () => {
           ]);
           
           setAvailableModels(allModels);
-
-          // Select latest model if available and none currently selected
-          if (allModels.length > 0 && !modelId) {
-              const latest = allModels[0];
-              setModelImageUrl(latest.url);
-              setModelId(latest.id);
-          }
-
-          // Looks are independent of the active model, they are historical records
           setSavedLooks(dbLooks.sort((a, b) => b.timestamp - a.timestamp));
           setWardrobe(dbWardrobe);
 
       } catch (err) {
           console.error("Failed to load user data:", err);
       }
-  }, [session, modelId]);
+  }, [userId]); 
 
+  // 3. Data Loading Effect (Runs once when userId or API key is ready)
   useEffect(() => {
-    if (session && hasApiKey) {
+    if (userId && hasApiKey) {
         loadProducts();
         loadUserData();
-    
+    }
+  }, [loadProducts, loadUserData, hasApiKey, userId]);
+
+  // 4. Auto-Select Latest Model (Decoupled from data loading)
+  useEffect(() => {
+      if (availableModels.length > 0 && !modelId && !isCreatingNewModel) {
+          const latest = availableModels[0];
+          setModelImageUrl(latest.url);
+          setModelId(latest.id);
+      }
+  }, [availableModels, modelId, isCreatingNewModel]);
+
+  // 5. Splash Screen Timer
+  useEffect(() => {
+    if (session && hasApiKey) {
         const timer = setTimeout(() => {
           setShowSplash(false);
         }, 1500);
-    
         return () => clearTimeout(timer);
     }
-  }, [loadProducts, loadUserData, hasApiKey, session]);
-
-  useEffect(() => {
-    if (session && hasApiKey && (activeTab === 'looks' || activeTab === 'wardrobe')) {
-      loadUserData();
-    }
-  }, [activeTab, loadUserData, hasApiKey, session]);
+  }, [session, hasApiKey]);
 
   const filteredProducts = useMemo(() => {
     if (!searchQuery.trim()) return products;
@@ -199,6 +201,7 @@ const App: React.FC = () => {
 
   const handleModelFinalized = async (url: string) => {
     setModelImageUrl(url);
+    setIsCreatingNewModel(false); // Reset flag since creation is done
 
     try {
         const savedModel = await userDataService.saveModel(url);
@@ -216,8 +219,9 @@ const App: React.FC = () => {
   };
 
   const handleCreateNewAvatar = async () => {
-        // Do not delete old model, just reset state to allow creation of a new one
-        // The user can switch back to old ones later.
+        // Set flag to prevent auto-selection of old models during this process
+        setIsCreatingNewModel(true);
+        
         setModelImageUrl(null);
         setModelId(null);
         setIsLoading(false);
@@ -227,6 +231,7 @@ const App: React.FC = () => {
   };
   
   const handleSelectModel = (model: Model) => {
+      setIsCreatingNewModel(false); // Ensure flag is off when manually selecting
       setModelImageUrl(model.url);
       setModelId(model.id);
   };
@@ -553,10 +558,8 @@ const App: React.FC = () => {
           }
       }).catch(err => {
           console.error("Background analysis failed:", err);
-          // Stop spinner, keep as basic item
-          setWardrobe(prev => prev.map(item => item.id === tempId ? { ...item, isAnalyzing: false, category: 'custom' } : item));
-          // Still try to save
-          userDataService.addToWardrobe({ ...tempItem, category: 'custom', isAnalyzing: false }, 'custom');
+          // If analysis fails completely, remove the stuck spinner item to prevent confusion
+          setWardrobe(prev => prev.filter(item => item.id !== tempId));
       });
 
       // 4. Return the temp item immediately so callers (like RemixStudio) can use it

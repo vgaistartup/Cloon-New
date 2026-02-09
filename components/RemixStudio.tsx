@@ -106,17 +106,17 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
   const handleSelectProduct = (item: Product | WardrobeItem) => {
       let targetSlot: SlotId = 'top'; // Default fallback
       
-      // 1. Try to infer slot from category
-      if ((item as Product).category) {
+      // PRIORITY 1: If the user is currently browsing a specific slot (e.g. Shoes), 
+      // prioritize placing the item there, especially for custom uploads or cross-category selections.
+      if (pickerActiveCategory !== 'wardrobe') {
+          targetSlot = pickerActiveCategory;
+      } 
+      // PRIORITY 2: If in Wardrobe mode (general browsing), try to infer slot from category.
+      else if ((item as Product).category) {
           const detectedSlot = getSlotIdFromCategory((item as Product).category);
           if (detectedSlot) {
               targetSlot = detectedSlot;
           }
-      } 
-      // 2. If no category (e.g. raw wardrobe item) or currently in wardrobe tab,
-      // fallback to the last active "slot" context. 
-      else if (pickerActiveCategory !== 'wardrobe') {
-          targetSlot = pickerActiveCategory;
       }
 
       setSelections(prev => ({ ...prev, [targetSlot]: item }));
@@ -213,8 +213,7 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
 
       // 2. Wardrobe Category
       if (pickerActiveCategory === 'wardrobe') {
-          // Filter wardrobe items based on subCategory (if we had subcats for wardrobe)
-          // For now, Wardrobe just shows everything or we could filter by 'All'
+          // Wardrobe view shows everything
           return wardrobe;
       }
 
@@ -398,7 +397,7 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
                                 ) : (
                                     <div className="flex flex-col items-center gap-4 opacity-40 group-hover:opacity-60 transition-opacity text-center">
                                         <slot.icon className="w-16 h-16 text-gray-600" />
-                                        {/* Removed Text Label per previous request */}
+                                        <span className="text-sm font-medium text-gray-500">{slot.label}</span>
                                     </div>
                                 )}
                             </div>
@@ -519,7 +518,6 @@ const RemixStudio: React.FC<RemixStudioProps> = ({ onClose, products, wardrobe, 
                                   }
                                   
                                   const isSelected = selections[targetSlot]?.id === item.id;
-                                  // Check if it's a product or wardrobe item for price rendering
                                   const price = (item as Product).price;
                                   const brand = (item as Product).brand;
 

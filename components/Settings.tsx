@@ -26,6 +26,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose, onOpenDashboard }) => {
     // App.tsx listener will handle redirect to auth screen
   };
 
+  const handleDashboardClick = () => {
+      const pin = window.prompt("Enter Admin PIN:");
+      if (pin === "1234") {
+          onOpenDashboard();
+      } else if (pin !== null) {
+          alert("Incorrect PIN.");
+      }
+  };
+
   return (
     <div className="h-full w-full bg-white flex flex-col">
       <div className="p-6 flex justify-end shrink-0">
@@ -46,7 +55,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose, onOpenDashboard }) => {
           ))}
           
           <button 
-            onClick={onOpenDashboard}
+            onClick={handleDashboardClick}
             className="w-full flex items-center justify-between text-lg font-medium text-text-primary py-4 border-b border-border hover:pl-2 transition-all text-left"
           >
             Dashboard

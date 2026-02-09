@@ -4,20 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-import { WardrobeItem } from "../types";
+import { Product, ProductCategory } from "../types";
 
-export type ProductCategory = 'top' | 'bottom' | 'shoes' | 'outerwear' | 'accessory';
-
-export interface Product extends WardrobeItem {
-    price: number;
-    salePrice?: number;
-    brand: string;
-    affiliateLink: string;
-    urls?: string[]; // Array for multiple product images
-    category?: ProductCategory;
-    subCategory?: string;
-    description?: string;
-}
+// Re-export types for compatibility with other files importing from here
+export type { Product, ProductCategory };
 
 export const PRODUCT_CATEGORIES_CONFIG = [
     {

@@ -1,10 +1,10 @@
-
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
 import { supabase } from '../lib/supabaseClient';
 import { Look, Model, WardrobeItem } from '../types';
+import { compressImage } from '../lib/utils';
 
 // Helper to get authenticated user ID safely
 const getAuthUserId = async (): Promise<string> => {
@@ -26,9 +26,12 @@ export const userDataService = {
             return null;
         }
 
+        // OPTIMIZATION: Compress before saving to reduce DB size
+        const compressedUrl = await compressImage(url);
+
         const { data, error } = await supabase
         .from('user_models')
-        .insert([{ user_id: userId, url }])
+        .insert([{ user_id: userId, url: compressedUrl }])
         .select()
         .single();
         
@@ -40,8 +43,8 @@ export const userDataService = {
             userId: data.user_id,
             createdAt: new Date(data.created_at).getTime()
         };
-    } catch (error) {
-        console.error("Error saving model:", error);
+    } catch (error: any) {
+        console.error("Error saving model:", JSON.stringify(error, null, 2));
         return null;
     }
   },
@@ -68,8 +71,8 @@ export const userDataService = {
             };
         }
         return null;
-     } catch (error) {
-         console.error("Error fetching latest model:", error);
+     } catch (error: any) {
+         console.error("Error fetching latest model:", JSON.stringify(error, null, 2));
          return null;
      }
   },
@@ -81,9 +84,16 @@ export const userDataService = {
             .from('user_models')
             .select('*')
             .eq('user_id', userId)
-            .order('created_at', { ascending: false });
+            .order('created_at', { ascending: false })
+            .limit(5); 
 
-        if (error) throw error;
+        if (error) {
+            if (error.code === '57014') {
+                console.warn("Database timeout fetching models. Returning empty list to prevent crash.");
+                return [];
+            }
+            throw error;
+        }
 
         return (data || []).map((row: any) => ({
             id: row.id,
@@ -91,8 +101,8 @@ export const userDataService = {
             userId: row.user_id,
             createdAt: new Date(row.created_at).getTime()
         }));
-      } catch (error) {
-          console.error("Error fetching all models:", error);
+      } catch (error: any) {
+          console.error("Error fetching all models:", JSON.stringify(error, null, 2));
           return [];
       }
   },
@@ -100,12 +110,24 @@ export const userDataService = {
   async saveLook(look: Omit<Look, 'id' | 'timestamp'>): Promise<Look | null> {
       try {
         const userId = await getAuthUserId();
+
+        // OPTIMIZATION: Compress main look image
+        const compressedLookUrl = await compressImage(look.url);
+
+        // OPTIMIZATION: Compress any heavy base64 garment images stored in the JSON
+        const optimizedGarments = await Promise.all(look.garments.map(async (g) => {
+            if (g.url && g.url.startsWith('data:')) {
+                return { ...g, url: await compressImage(g.url, 800) }; // Lower res for thumbnails
+            }
+            return g;
+        }));
+
         const { data, error } = await supabase
             .from('user_looks')
             .insert([{ 
                 user_id: userId, 
-                url: look.url, 
-                garments: look.garments 
+                url: compressedLookUrl, 
+                garments: optimizedGarments 
             }])
             .select()
             .single();
@@ -119,8 +141,8 @@ export const userDataService = {
             timestamp: new Date(data.created_at).getTime(),
             userId: data.user_id
         };
-      } catch (error) {
-          console.error("Error saving look:", error);
+      } catch (error: any) {
+          console.error("Error saving look:", JSON.stringify(error, null, 2));
           return null;
       }
   },
@@ -133,19 +155,40 @@ export const userDataService = {
             .from('user_looks')
             .select('*')
             .eq('user_id', userId)
-            .order('created_at', { ascending: false });
+            .order('created_at', { ascending: false })
+            .limit(10); 
 
-        if (error) throw error;
+        if (error) {
+            if (error.code === '57014') {
+                console.warn("Database timeout fetching looks. Returning empty list.");
+                return [];
+            }
+            throw error;
+        }
 
-        return (data || []).map((row: any) => ({
-            id: row.id,
-            url: row.url,
-            garments: row.garments,
-            timestamp: new Date(row.created_at).getTime(),
-            userId: row.user_id
-        }));
-      } catch (error) {
-          console.error("Error fetching looks:", error);
+        return (data || []).map((row: any) => {
+            let garments = [];
+            try {
+                if (typeof row.garments === 'string') {
+                    garments = JSON.parse(row.garments);
+                } else if (Array.isArray(row.garments)) {
+                    garments = row.garments;
+                }
+            } catch (e) {
+                console.warn("Failed to parse garments for look:", row.id);
+            }
+
+            return {
+                id: row.id,
+                url: row.url,
+                garments: garments,
+                timestamp: new Date(row.created_at).getTime(),
+                userId: row.user_id
+            };
+        });
+      } catch (error: any) {
+          const msg = error.message || JSON.stringify(error, null, 2);
+          console.error("Error fetching looks:", msg);
           return [];
       }
   },
@@ -153,25 +196,17 @@ export const userDataService = {
   async deleteLook(lookId: string): Promise<boolean> {
       try {
         const userId = await getAuthUserId();
-        console.log(`[Delete Look] Attempting to delete look ${lookId} for user ${userId}`);
         
-        const { error, status, statusText } = await supabase
+        const { error } = await supabase
             .from('user_looks')
             .delete()
             .eq('id', lookId)
             .eq('user_id', userId);
         
-        console.log(`[Delete Look] Response: Status ${status} ${statusText}`, error);
-
-        if (error) {
-            console.error("[Delete Look] DB Error:", error);
-            throw error;
-        }
-        
-        console.log(`[Delete Look] Successfully deleted look request sent.`);
+        if (error) throw error;
         return true;
-      } catch (error) {
-          console.error("[Delete Look] Exception:", error);
+      } catch (error: any) {
+          console.error("[Delete Look] Exception:", error.message || error);
           return false;
       }
   },
@@ -186,8 +221,8 @@ export const userDataService = {
             .eq('user_id', userId);
             
             if (error) throw error;
-       } catch (error) {
-           console.error("Error deleting model:", error);
+       } catch (error: any) {
+           console.error("Error deleting model:", JSON.stringify(error, null, 2));
        }
   },
 
@@ -205,12 +240,15 @@ export const userDataService = {
             .single();
 
         if (existing) return;
+
+        // OPTIMIZATION: Compress item image
+        const compressedUrl = await compressImage(item.url);
         
         const payload = {
             user_id: userId,
             item_id: item.id,
             name: item.name,
-            url: item.url,
+            url: compressedUrl,
             category: category || item.category || null,
             metadata: {
                 subCategory: item.subCategory,
@@ -224,32 +262,24 @@ export const userDataService = {
 
         if (error) throw error;
       } catch (error: any) {
-          console.error("Error adding to wardrobe:", error.message || error);
-          if (error?.code) {
-               alert(`Error saving to wardrobe: ${error.message} (Code: ${error.code})`);
-          }
+          console.error("Error adding to wardrobe:", error.message || JSON.stringify(error, null, 2));
       }
   },
 
   async removeFromWardrobe(itemId: string): Promise<boolean> {
       try {
         const userId = await getAuthUserId();
-        console.log(`[Delete Wardrobe] Attempting to delete item ${itemId} for user ${userId}`);
 
-        const { error, status, statusText } = await supabase
+        const { error } = await supabase
             .from('user_wardrobe')
             .delete()
             .eq('user_id', userId)
             .eq('item_id', itemId);
 
-        console.log(`[Delete Wardrobe] Response: Status ${status} ${statusText}`, error);
-
         if (error) throw error;
-        
-        console.log("[Delete Wardrobe] Success.");
         return true;
-      } catch (error) {
-          console.error("[Delete Wardrobe] Error:", error);
+      } catch (error: any) {
+          console.error("[Delete Wardrobe] Error:", JSON.stringify(error, null, 2));
           return false;
       }
   },
@@ -257,21 +287,17 @@ export const userDataService = {
   async removeMultipleFromWardrobe(itemIds: string[]): Promise<boolean> {
     try {
         const userId = await getAuthUserId();
-        console.log(`[Delete Wardrobe Batch] Items:`, itemIds, `User: ${userId}`);
 
-        const { error, status, statusText } = await supabase
+        const { error } = await supabase
             .from('user_wardrobe')
             .delete()
             .eq('user_id', userId)
             .in('item_id', itemIds);
 
-        console.log(`[Delete Wardrobe Batch] Response: Status ${status} ${statusText}`, error);
-
         if (error) throw error;
-        console.log(`[Delete Wardrobe Batch] Success.`);
         return true;
-    } catch (error) {
-        console.error("[Delete Wardrobe Batch] Error:", error);
+    } catch (error: any) {
+        console.error("[Delete Wardrobe Batch] Error:", JSON.stringify(error, null, 2));
         return false;
     }
   },
@@ -284,9 +310,16 @@ export const userDataService = {
             .from('user_wardrobe')
             .select('*')
             .eq('user_id', userId)
-            .order('created_at', { ascending: false });
+            .order('created_at', { ascending: false })
+            .limit(24); 
 
-        if (error) throw error;
+        if (error) {
+            if (error.code === '57014') {
+                console.warn("Database timeout fetching wardrobe. Returning empty list.");
+                return [];
+            }
+            throw error;
+        }
 
         return (data || []).map((row: any) => ({
             id: row.item_id, 
@@ -296,8 +329,8 @@ export const userDataService = {
             subCategory: row.metadata?.subCategory,
             densePrompt: row.metadata?.densePrompt
         }));
-      } catch (error) {
-          console.error("Error fetching wardrobe:", error);
+      } catch (error: any) {
+          console.error("Error fetching wardrobe:", JSON.stringify(error, null, 2));
           return [];
       }
   }

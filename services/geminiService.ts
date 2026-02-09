@@ -4,12 +4,39 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-import { GoogleGenAI, GenerateContentResponse, Modality, Chat, Type } from "@google/genai";
+import { GoogleGenAI, GenerateContentResponse, Modality, Chat, Type, HarmCategory, HarmBlockThreshold } from "@google/genai";
 import { WardrobeItem } from "../types";
 
 // Models Configuration
 const PRIMARY_MODEL = 'gemini-3-pro-image-preview';
 const FALLBACK_MODEL = 'gemini-2.5-flash-image';
+
+const SAFETY_SETTINGS = [
+    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+    { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
+];
+
+// Helper for safe API Key access
+const getApiKey = (): string => {
+    // 1. Try standard process.env (Vite/Node)
+    try {
+        if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
+            return process.env.API_KEY;
+        }
+    } catch (e) { /* ignore */ }
+
+    // 2. Try window polyfill
+    try {
+        if (typeof window !== 'undefined' && (window as any).process?.env?.API_KEY) {
+            return (window as any).process.env.API_KEY;
+        }
+    } catch (e) { /* ignore */ }
+
+    // 3. Last resort fallback or empty string to prevent crash, caller handles validation
+    return '';
+};
 
 // --- Types ---
 
@@ -32,6 +59,26 @@ export interface UserIdentityAnalysis {
     };
     generation_prompt_fragment: string;
 }
+
+const DEFAULT_ANALYSIS: UserIdentityAnalysis = {
+    subject_identity: {
+        gender: "Neutral",
+        age_approx: 25,
+        ethnicity_descriptor: "Human with natural features",
+        body_type: "Standard"
+    },
+    facial_physics: {
+        skin_texture: "Natural skin texture with visible pores",
+        skin_tone_hex_approx: "#FFCCAA",
+        undertone: "Neutral",
+        hair_details: "Natural hair"
+    },
+    lighting_reference: {
+        direction: "Frontal",
+        shadow_hardness: "Soft"
+    },
+    generation_prompt_fragment: "Photorealistic portrait, 85mm lens, high fidelity."
+};
 
 // --- Helper Functions ---
 
@@ -148,7 +195,7 @@ const generateWithFallback = async (
     config: any, 
     logContext: string
 ): Promise<string> => {
-    const apiKey = process.env.API_KEY;
+    const apiKey = getApiKey();
     if (!apiKey) {
         throw new Error("API Key not found. Please connect your Google account.");
     }
@@ -176,11 +223,19 @@ const generateWithFallback = async (
         console.warn(`[Gemini Service] ${logContext} - Primary model failed: ${error.message}. Switching to fallback ${FALLBACK_MODEL}.`);
         
         try {
+            // Sanitize Config for Fallback: Flash model doesn't support 'imageSize'
+            const fallbackConfig = { ...config };
+            if (fallbackConfig.imageConfig) {
+                // Strip imageSize, keep aspectRatio
+                const { imageSize, ...restImageConfig } = fallbackConfig.imageConfig;
+                fallbackConfig.imageConfig = restImageConfig;
+            }
+
             const fallbackResponse = await Promise.race([
                 ai.models.generateContent({
                     model: FALLBACK_MODEL,
                     contents,
-                    config
+                    config: fallbackConfig
                 }),
                 new Promise<never>((_, reject) => 
                     setTimeout(() => reject(new Error("Fallback model timeout")), 30000)
@@ -194,10 +249,16 @@ const generateWithFallback = async (
             console.warn(`[Gemini Service] ${logContext} - Standard fallback failed: ${fallbackError.message}. Retrying with SAFE CONFIG.`);
             
             try {
+                // Retry with minimal config but KEEP safety settings to prevent safety blocks
+                // Also ensure NO imageSize is passed
+                const safeConfig = {
+                    safetySettings: config.safetySettings
+                };
+
                 const safeResponse = await ai.models.generateContent({
                     model: FALLBACK_MODEL,
                     contents,
-                    config: {} 
+                    config: safeConfig
                 });
                 
                 console.log(`[Gemini Service] ${logContext} - Success with Safe Fallback`);
@@ -214,7 +275,7 @@ const generateWithFallback = async (
 
 // 1. User Identity Analysis (The "Deep Scan")
 export const analyzeUserIdentity = async (file: File): Promise<UserIdentityAnalysis> => {
-    const apiKey = process.env.API_KEY;
+    const apiKey = getApiKey();
     if (!apiKey) throw new Error("No API Key");
     const ai = new GoogleGenAI({ apiKey });
     const imagePart = await fileToPart(file);
@@ -258,26 +319,43 @@ export const analyzeUserIdentity = async (file: File): Promise<UserIdentityAnaly
         });
 
         const text = response.text?.trim() || "{}";
-        return JSON.parse(text) as UserIdentityAnalysis;
+        let json: any = {};
+        try {
+            json = JSON.parse(text);
+        } catch (e) {
+            console.warn("Failed to parse identity analysis JSON, using partial data.", e);
+        }
+
+        // Robust merge with defaults to prevent undefined crashes
+        const analysis = { ...DEFAULT_ANALYSIS, ...json };
+        analysis.subject_identity = { ...DEFAULT_ANALYSIS.subject_identity, ...json.subject_identity };
+        analysis.facial_physics = { ...DEFAULT_ANALYSIS.facial_physics, ...json.facial_physics };
+        analysis.lighting_reference = { ...DEFAULT_ANALYSIS.lighting_reference, ...json.lighting_reference };
+        
+        return analysis as UserIdentityAnalysis;
     } catch (e) {
         console.error("Failed to analyze user identity", e);
-        // Return specific fallback structure
-        throw new Error("Could not analyze face. Please try a clearer photo.");
+        // Return default analysis instead of failing hard, allowing generation to proceed
+        return DEFAULT_ANALYSIS;
     }
 };
 
-// 2. Garment Analysis (Kept intact)
+// 2. Garment Analysis
 export const generateItemDescription = async (file: File): Promise<{ category: 'Major' | 'Minor', description: string, file: File }> => {
-    const apiKey = process.env.API_KEY;
+    const apiKey = getApiKey();
     if (!apiKey) throw new Error("No API Key");
     const ai = new GoogleGenAI({ apiKey });
     const imagePart = await fileToPart(file);
     
+    // Updated Prompt to handle images where models are wearing the clothes
     const prompt = `
-    Analyze this fashion item. 
+    Analyze this fashion image.
+    CRITICAL: IGNORE ANY HUMAN MODEL WEARING THE CLOTHING. 
+    Focus ONLY on the garment itself as if it were floating or on a mannequin.
+
     1. Classify it as "Major" if it is a Top, Bottom, Dress, Jacket, Coat, Suit, or Pants.
     2. Classify it as "Minor" if it is Shoes, Sneakers, Boots, Sandals, Hat, Belt, Bag, Scarf, Glasses, or Jewelry.
-    3. Provide a highly detailed visual description (color, material, texture) in less than 40 words.
+    3. Provide a highly detailed visual description (color, material, texture, cut) in less than 40 words.
     
     Return JSON: { "category": "Major" | "Minor", "description": "string" }
     `;
@@ -314,7 +392,7 @@ export const generateItemDescription = async (file: File): Promise<{ category: '
 
 // 3. Wardrobe Item Analysis (Kept intact)
 export const analyzeWardrobeItem = async (file: File): Promise<Partial<WardrobeItem>> => {
-    const apiKey = process.env.API_KEY;
+    const apiKey = getApiKey();
     if (!apiKey) throw new Error("No API Key");
     
     const ai = new GoogleGenAI({ apiKey });
@@ -322,7 +400,7 @@ export const analyzeWardrobeItem = async (file: File): Promise<Partial<WardrobeI
 
     const prompt = `
     TASK:
-    1. Detect the main clothing item in the image.
+    1. Detect the main clothing item in the image. IGNORE any person wearing it.
     2. Categorize it (Top, Bottom, FullBody, Footwear, Accessory).
     3. Extract specific attributes (Color, Fabric, Fit, Neckline, Pattern).
     4. Write a "Dense Visual Description". This is CRITICAL. It must describe the texture, weight, how light hits it, and the cut, so that an image generation model can recreate it perfectly later.
@@ -380,37 +458,42 @@ export const analyzeWardrobeItem = async (file: File): Promise<Partial<WardrobeI
 export const generateModelImage = async (userImage: File, analysis: UserIdentityAnalysis): Promise<string> => {
     const userImagePart = await fileToPart(userImage);
     
-    // Enhanced prompt for hyper-realism using the analysis data
+    // Enhanced prompt for hyper-realism with DIGITAL TWIN constraint and 8K Requirement
     const prompt = `
-    Generate a HYPER-PHOTOREALISTIC full-body fashion portrait of this person.
+    Generate a DIGITAL TWIN of this person for a high-end fashion application.
 
-    SUBJECT IDENTITY:
-    - Ethnicity/Features: ${analysis.subject_identity.ethnicity_descriptor}
-    - Age: ${analysis.subject_identity.age_approx}
-    - Body Type: ${analysis.subject_identity.body_type}
+    IDENTITY LOCK (CRITICAL):
+    - This is a FaceID task. The output face must match the Input Reference exactly.
+    - Do NOT "beautify", "instagram filter", or "average" the facial features.
+    - Preserve: Nose shape, eye distance, lip shape, and jawline structure exactly.
+    - Preserve: ${analysis.subject_identity.ethnicity_descriptor}.
     
-    PHYSICAL DETAILS (CRITICAL FOR REALISM):
-    - Skin Texture: ${analysis.facial_physics.skin_texture}.
+    PHYSICAL REALISM & QUALITY:
+    - **8K ULTRA HIGH RESOLUTION**.
+    - Skin Texture: ${analysis.facial_physics.skin_texture}. MUST render pores and micro-imperfections.
+    - NO NOISE. Crystal clear sharpness.
     - Hair: ${analysis.facial_physics.hair_details}.
     - Skin Tone: ${analysis.facial_physics.undertone} (Approx Hex: ${analysis.facial_physics.skin_tone_hex_approx}).
     
     PHOTOGRAPHY STYLE:
     ${analysis.generation_prompt_fragment}
-    Shot on 35mm film, ISO 200. Natural skin texture, subsurface scattering (SSS), slight film grain, chromatic aberration, hyper-realistic, depth of field.
+    Shot on 35mm film, ISO 100. Natural skin texture, subsurface scattering (SSS), slight film grain but high clarity, chromatic aberration, hyper-realistic, depth of field.
     
-    MANDATORY RULES:
-    1. EXACT IDENTITY: The face must match the reference photo exactly.
-    2. NO AI SMOOTHING: Render visible pores and imperfections. Avoid the 'plastic' or 'airbrushed' look.
-    3. LIGHTING: Professional studio softbox lighting. Neutral color temperature.
-    4. POSE: Standing full-body, neutral confident pose, arms relaxed at sides.
-    5. BACKGROUND: SOLID PURE WHITE (#FFFFFF).
+    COMPOSITION:
+    - Pose: Standing full-body, neutral confident pose, arms relaxed at sides.
+    - Framing: CENTERED, FULL BODY visible from head to toe. Leave slight padding at top and bottom.
+    - Background: SOLID PURE WHITE (#FFFFFF).
     
-    Output: A raw-style photograph.
+    NEGATIVE PROMPT (FORBIDDEN):
+    - Illustration, painting, 3D render, plastic skin, airbrushed, blurry, low resolution, pixelated, noise, distorted eyes, extra fingers, different person, generic model face, cropped head, close up.
     `;
     
     return generateWithFallback(
         { parts: [userImagePart, { text: prompt }] },
-        { imageConfig: { aspectRatio: '3:4' } },
+        { 
+            imageConfig: { aspectRatio: '3:4', imageSize: '4K' }, // Enable 4K
+            safetySettings: SAFETY_SETTINGS
+        },
         "generateModelImage"
     );
 };
@@ -428,30 +511,42 @@ export const generateVirtualTryOnImage = async (modelImageUrl: string, garmentIm
         console.warn("Could not generate text description for garment, proceeding with image only.");
     }
 
+    // Revised Prompt: Stronger Identity Preservation + 8K
     const contentsParts = [
-        { text: "INPUT 1: The Person (The Target Body)." },
+        { text: "You are a Virtual Try-On Engine. You act as a Compositor, NOT a Creator." },
+        { text: "INPUT 1: The Identity Reference (The User)." },
         modelImagePart,
-        { text: "INPUT 2: The Clothing (The Source Garment)." },
+        { text: "INPUT 2: The Garment Reference." },
         garmentImagePart,
         { text: `
-        TASK: REPLACE the outfit of the person in INPUT 1 with the clothing from INPUT 2.
+        TASK: Composite the garment from INPUT 2 onto the person in INPUT 1.
         
-        INPUT 2 DESCRIPTION: ${garmentDescription}
+        IDENTITY PRESERVATION (PRIORITY #1):
+        - The final image MUST depict the EXACT same person as INPUT 1. 
+        - Lock facial features: Eyes, Nose, Mouth, Jawline.
+        - Lock body proportions: Height, Shoulder width, Hip width.
+        - Do NOT generate a generic model. Use the face from INPUT 1.
 
-        STRICT RULES:
-        1. CLOTHING REPLACEMENT: IGNORE the original clothes in INPUT 1. Render the item from INPUT 2 with pixel-perfect texture fidelity.
-        2. PHOTOREALISM: The final image must look like a RAW photograph. Skin must have texture (pores, wrinkles) and subsurface scattering. NO PLASTIC TEXTURES.
-        3. PRESERVE IDENTITY: The person's face, hair, and skin tone must remain identical to INPUT 1.
-        4. PHYSICS: The new clothing must drape naturally on the body.
-        5. BACKGROUND: Pure White (#FFFFFF).
-        
-        Output: A single photorealistic image.
+        GARMENT EXECUTION:
+        - IGNORE any model wearing the clothes in INPUT 2.
+        - EXTRACT only this item: ${garmentDescription}
+        - Apply the garment realistically (drape, tension, lighting) onto the body from INPUT 1.
+
+        STYLE & QUALITY:
+        - **8K ULTRA HIGH RESOLUTION**. NOISE FREE.
+        - Hyper-realistic photography. 
+        - Skin texture must match INPUT 1 (visible pores, no plastic smoothing).
+        - Background: Pure White (#FFFFFF).
+        - FRAMING: Maintain the exact full-body framing of INPUT 1. Do not zoom in or crop the head or feet.
         ` }
     ];
     
     return generateWithFallback(
         { parts: contentsParts },
-        { imageConfig: { aspectRatio: '3:4' } },
+        { 
+            imageConfig: { aspectRatio: '3:4', imageSize: '4K' }, // Enable 4K
+            safetySettings: SAFETY_SETTINGS 
+        },
         "generateVirtualTryOnImage"
     );
 };
@@ -468,31 +563,40 @@ export const generateCompleteLook = async (modelImageUrl: string, garmentImages:
     const minorItemDescriptions = minorItems.map(item => item.description).join(". Also wearing ");
     
     const contentsParts: any[] = [
-        { text: "INPUT 1: The Reference Model." },
+        { text: "INPUT 1: The Identity Reference." },
         modelImagePart
     ];
 
     if (majorItemParts.length > 0) {
-        contentsParts.push({ text: "INPUT 2: The Clothing Stack." });
+        contentsParts.push({ text: "INPUT 2: The Clothing Stack (Reference Images)." });
         contentsParts.push(...majorItemParts);
     }
 
     contentsParts.push({ text: `
-        TASK: COMPOSITE the Clothing from INPUT 2 onto the Model in INPUT 1.
+        TASK: Composite the Clothing from INPUT 2 onto the Model in INPUT 1.
         
-        EXECUTION:
-        1. IDENTITY: The Model's identity and body shape must remain 100% IDENTICAL.
-        2. PHOTOREALISM: Render as a RAW photograph. Ensure skin has realistic texture and subsurface scattering.
-        3. TEXTURE TRANSFER: Transfer specific textures/prints of the source clothing.
-        4. ${minorItemDescriptions ? `ACCESSORIES: Incorporate these additional items: ${minorItemDescriptions}.` : ''}
-        5. BACKGROUND: Pure White (#FFFFFF).
+        IDENTITY LOCK:
+        - The Face and Body Structure must remain IDENTICAL to INPUT 1.
+        - This is a specific person, not a generic model. Do not change their ethnicity, age, or features.
         
-        Output: A single high-fashion photorealistic image.
+        CLOTHING COMPOSITING:
+        - Ignore the models in the clothing reference images. Isolate the clothes.
+        - Layer the items naturally.
+        - ${minorItemDescriptions ? `ACCESSORIES: Incorporate these additional items: ${minorItemDescriptions}.` : ''}
+        
+        OUTPUT:
+        - **8K ULTRA HIGH RESOLUTION**.
+        - A single, photorealistic fashion photo.
+        - Background: Pure White (#FFFFFF).
+        - FRAMING: Full body, centered, head-to-toe visible.
     `});
     
     return generateWithFallback(
         { parts: contentsParts },
-        { imageConfig: { aspectRatio: '3:4' } },
+        { 
+            imageConfig: { aspectRatio: '3:4', imageSize: '4K' }, // Enable 4K
+            safetySettings: SAFETY_SETTINGS 
+        },
         "generateCompleteLook"
     );
 };
@@ -520,17 +624,22 @@ export const generateLookVariation = async (
         { text: "REFERENCE IMAGE (Person & Outfit):" },
         referenceImagePart,
         { text: `
-        TASK: Regenerate this person in a specific environment and pose.
+        TASK: Re-photograph this exact person in a new environment/pose.
+        
+        CRITICAL IDENTITY LOCK:
+        - The person in the output must be RECOGNIZABLE as the person in the Reference Image.
+        - Do NOT replace the face with a generic AI face. Keep facial landmarks identical.
+        - Preserve the outfit details exactly.
         
         INPUTS:
         - Target Pose: ${poseInstruction}
         - Target Vibe: ${vibeInstruction}
         
-        CRITICAL INSTRUCTIONS:
-        1. IDENTITY & REALISM: Preserve the face, hair, and skin tone IDENTICAL to the Reference Image. Render with PHOTOREALISTIC skin texture (pores, imperfections). No 'AI plastic' skin.
+        INSTRUCTIONS:
+        1. IDENTITY & REALISM: Render with **8K PHOTOREALISTIC** quality. Skin texture (pores, imperfections). No 'AI plastic' skin. No Noise.
         2. PHYSICS & LIGHTING: Ensure the lighting of the environment interacts realistically with the fabric. ${materialLogic}
         3. POSE: ${config.pose ? "Change the pose as requested." : "Keep the pose natural."}
-        4. COMPOSITION: The subject must look anchored in the scene.
+        4. FRAMING: Full body, centered within the frame.
         
         Return ONLY the photorealistic image.
         ` }
@@ -538,7 +647,10 @@ export const generateLookVariation = async (
 
     return generateWithFallback(
         { parts: contentsParts },
-        { imageConfig: { aspectRatio: '3:4' } },
+        { 
+            imageConfig: { aspectRatio: '3:4', imageSize: '4K' }, // Enable 4K
+            safetySettings: SAFETY_SETTINGS
+        },
         "generateLookVariation"
     );
 };
@@ -549,7 +661,7 @@ export const generatePoseVariation = async (url: string, pose: string) => {
 };
 
 export const createStylistChat = (): Chat => {
-    const apiKey = process.env.API_KEY;
+    const apiKey = getApiKey();
     if (!apiKey) throw new Error("No API Key");
     const ai = new GoogleGenAI({ apiKey });
     
@@ -563,7 +675,7 @@ export const createStylistChat = (): Chat => {
 };
 
 export const analyzeOutfitStyle = async (imageBase64: string): Promise<{ score: number; explanation: string }> => {
-    const apiKey = process.env.API_KEY;
+    const apiKey = getApiKey();
     if (!apiKey) throw new Error("No API Key");
     const ai = new GoogleGenAI({ apiKey });
     

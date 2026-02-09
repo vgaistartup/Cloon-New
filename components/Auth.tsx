@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import Spinner from './Spinner';
 
 const Auth: React.FC = () => {
-  const [mode, setMode] = useState<'login' | 'signup'>('signup');
+  const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);

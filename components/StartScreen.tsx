@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { UploadCloudIcon } from './icons';
 import { Compare } from './ui/compare';
@@ -16,6 +16,40 @@ interface StartScreenProps {
   onModelFinalized: (modelUrl: string) => void;
 }
 
+const GENERATION_STEPS = [
+  "Analyzing facial structure...",
+  "Constructing 3D body mesh...",
+  "Calibrating skin tone & lighting...",
+  "Rendering physics...",
+  "Polishing your Digital Twin..."
+];
+
+const DynamicLoadingText = () => {
+    const [index, setIndex] = useState(0);
+
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setIndex((prev) => (prev + 1) % GENERATION_STEPS.length);
+        }, 3000);
+        return () => clearInterval(interval);
+    }, []);
+
+    return (
+        <AnimatePresence mode="wait">
+            <motion.span
+                key={index}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.5 }}
+                className="inline-block min-w-[200px] text-center"
+            >
+                {GENERATION_STEPS[index]}
+            </motion.span>
+        </AnimatePresence>
+    );
+};
+
 const StartScreen: React.FC<StartScreenProps> = ({ onModelFinalized }) => {
   const [userImageUrl, setUserImageUrl] = useState<string | null>(null);
   const [generatedModelUrl, setGeneratedModelUrl] = useState<string | null>(null);
@@ -23,6 +57,12 @@ const StartScreen: React.FC<StartScreenProps> = ({ onModelFinalized }) => {
   const [error, setError] = useState<string | null>(null);
   
   const currentFileRef = useRef<File | null>(null);
+  const isMounted = useRef(true);
+
+  useEffect(() => {
+      isMounted.current = true;
+      return () => { isMounted.current = false; };
+  }, []);
 
   const handleFileSelect = useCallback(async (file: File) => {
     if (!file.type.startsWith('image/')) {
@@ -39,7 +79,7 @@ const StartScreen: React.FC<StartScreenProps> = ({ onModelFinalized }) => {
     // Local Preview
     const reader = new FileReader();
     reader.onload = (e) => {
-        if (currentFileRef.current === file) {
+        if (isMounted.current && currentFileRef.current === file) {
             setUserImageUrl(e.target?.result as string);
         }
     };
@@ -49,18 +89,18 @@ const StartScreen: React.FC<StartScreenProps> = ({ onModelFinalized }) => {
         // Step 1: Deep Analysis (Flash Vision)
         const analysis = await analyzeUserIdentity(file);
         
-        if (currentFileRef.current !== file) return; // Cancelled
+        if (!isMounted.current || currentFileRef.current !== file) return; // Cancelled
         
         // Step 2: Generation (Pro/Flash with Analysis Data)
         setLoadingState('generating');
         const url = await generateModelImage(file, analysis);
         
-        if (currentFileRef.current !== file) return; // Cancelled
+        if (!isMounted.current || currentFileRef.current !== file) return; // Cancelled
         
         setGeneratedModelUrl(url);
         setLoadingState('idle');
     } catch (err) {
-        if (currentFileRef.current !== file) return;
+        if (!isMounted.current || currentFileRef.current !== file) return;
         
         console.error("Generation failed", err);
         setLoadingState('idle');
@@ -156,7 +196,7 @@ const StartScreen: React.FC<StartScreenProps> = ({ onModelFinalized }) => {
               <div className="flex items-center gap-3 text-sm text-text-primary font-medium bg-white px-6 py-3 rounded-full shadow-soft mt-6 border border-border animate-pulse">
                 <Spinner />
                 <span>
-                    {loadingState === 'analyzing' ? 'Scanning facial physics...' : 'Designing your model...'}
+                    {loadingState === 'analyzing' ? 'Scanning facial physics...' : <DynamicLoadingText />}
                 </span>
               </div>
             )}

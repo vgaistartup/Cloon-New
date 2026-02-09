@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-import { Product } from "./data/products";
+export type ProductCategory = 'top' | 'bottom' | 'shoes' | 'outerwear' | 'accessory';
 
 export interface WardrobeItem {
   id: string;
@@ -17,6 +17,17 @@ export interface WardrobeItem {
   densePrompt?: string; // The "Dense Visual Description"
   searchTags?: string[];
   isAnalyzing?: boolean; // UI state for background processing
+}
+
+export interface Product extends WardrobeItem {
+    price: number;
+    salePrice?: number;
+    brand: string;
+    affiliateLink: string;
+    urls?: string[]; // Array for multiple product images
+    category?: ProductCategory;
+    subCategory?: string;
+    description?: string;
 }
 
 export interface OutfitLayer {

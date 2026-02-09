@@ -1,8 +1,4 @@
 
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
-*/
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import StartScreen from './StartScreen';
 import { DotsVerticalIcon, RotateCcwIcon, ShareIcon, Trash2Icon, PlusIcon, UserIcon, SparklesIcon, SkeletonFrontIcon, SkeletonThreeQuarterIcon, SkeletonSideIcon, SkeletonWalkIcon, SkeletonActionIcon, SkeletonLeanIcon, XIcon, ChevronDownIcon } from './icons';
@@ -10,6 +6,7 @@ import { motion, AnimatePresence, PanInfo } from 'framer-motion';
 import { Look, Model } from '../types';
 import { Product } from '../data/products';
 import { VIBE_OPTIONS } from '../data/vibes';
+import { Magnifier } from './ui/Magnifier';
 
 interface MyLooksProps {
     looks: Look[];
@@ -422,11 +419,10 @@ const MyLooks: React.FC<MyLooksProps> = ({ looks, products, modelImageUrl, activ
                         sortedLooks.map((look) => (
                             <div key={look.id} className="flex-shrink-0 w-full h-full snap-center flex items-center justify-center p-0">
                                 <div className="relative h-full w-auto aspect-[3/4] flex items-center justify-center">
-                                    <img 
+                                    <Magnifier 
                                         src={look.url} 
-                                        alt="Look" 
-                                        className="w-full h-full object-contain brightness-[1.08] contrast-[1.05] mix-blend-multiply" 
-                                        draggable={false}
+                                        className="w-full h-full"
+                                        zoomLevel={2.5}
                                     />
                                 </div>
                             </div>
